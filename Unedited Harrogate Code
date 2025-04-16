@@ -1,0 +1,1012 @@
+import math
+import numpy as np
+import matplotlib.pyplot as plt
+import matplotlib.animation as animation
+import scipy.signal
+from copy import deepcopy
+import psutil
+intensitiy_cmap = plt.cm.get_cmap('rainbow_r')
+
+def get_energy2(lattice,Jpp,Jss,Jps,d):
+
+    E = 0
+    for X in range(0,d):
+        for Y in range(0,d):
+            if lattice[X,Y] == 0:
+                for site in [lattice[X,Y-1],lattice[X,(Y+1)%d],lattice[X-1,Y],lattice[(X+1)%d,Y]]:
+                    if site == 0:
+                        E += Jss
+                    else:
+                        E -= Jps
+            else:
+                for site in [lattice[X,Y-1],lattice[X,(Y+1)%d],lattice[X-1,Y],lattice[(X+1)%d,Y]]:
+                    if site == 0:
+                        E -= Jps
+                    else:
+                
+                        E += Jpp*site*lattice[X,Y]
+    return(-E/4)
+
+def couple(s1,s2,Jpp,Jss,Jps,sp0,ss0):
+    
+    
+    if s1 < 1:
+        if s2 < 1:
+            #then solvent solvent
+            return(Jss*ss0**2)
+        else:
+            #then one solvent and one solution
+            return(Jps*ss0*sp0) 
+    else:
+        if s2 < 1:
+            #then one solvent and one solution
+            return(Jps*sp0*ss0)
+        else:
+            #then protein protein
+            return(Jpp*s1*s2)
+        
+def environment_8(x,y,d):
+    return([(x,y-1),(x,(y+1)%d),(x-1,y),((x+1)%d,y),((x+1)%d,(y+1)%d),((x+1)%d,y-1),(x-1,(y+1)%d),(x-1,y-1)])
+
+def do_swap(T,Jpp,Jss,Jps,X0,Y0,X1,Y1,d,lattice,sp0,ss0):
+    #now if it is 0 we want it to be read as -1
+    swapped = False
+    s0 = lattice[X0,Y0]
+    s1 = lattice[X1,Y1]
+    #print(s0,s1)
+    
+    
+    E_unswapped = -(sum([couple(s0,s,Jpp,Jss,Jps,sp0,ss0) for s in [lattice[c[0],c[1]] for c in environment_8(X0,Y0,d)]]) + 
+                    sum([couple(s1,s,Jpp,Jss,Jps,sp0,ss0) for s in [lattice[c[0],c[1]] for c in environment_8(X1,Y1,d)]]))
+    
+    #this is wrong, not s but sp0*(2*np.sign(s)-1)
+    
+            
+    E_swapped = -(sum([couple(s1,sp0*(2*np.sign(s)-1),Jpp,Jss,Jps,sp0,ss0) for s in [lattice[c[0],c[1]] for c in environment_8(X0,Y0,d)]]) + 
+            sum([couple(s0,s,Jpp,Jss,Jps,sp0,ss0) for s in [lattice[c[0],c[1]] for c in environment_8(X1,Y1,d)]]))
+        
+    #print("here",E_unswapped/T,E_swapped/T)
+    #if both are huge numbers, don't swap
+    
+    try:
+        P_unswapped = math.exp(-E_unswapped/T)
+    except:
+        #exponential doesn't evalute
+        return(s0,s1,swapped)
+        #P_unswapped = 1.0
+    try:
+        P_swapped = math.exp(-E_swapped/T)
+    except:
+        return(s0,s1,swapped)
+        #P_swapped = 0
+    #dE = E_swapped - Eunswapped
+    #if P_swapped + P_unswapped == 0:
+        #print(P_swapped,P_unswapped,E_swapped,E_unswapped,math.exp(min(-E_swapped/T,50)),
+             #math.exp(min(-E_unswapped/T,50)))
+    #print("still here",E_swapped/T,E_unswapped/T)
+    if P_swapped + P_unswapped == 0:
+        return(s0,s1,swapped)
+    if np.random.rand() < (P_swapped/(P_swapped + P_unswapped)):
+        swapped = True
+        #then we are swapping them
+        if s0 > 0:
+            if s1 > 0:
+                #print("here", X1,Y1)
+                return(sp0,sp0,swapped)
+            else:
+                return(0,sp0,swapped)
+        else:
+            if s1 > 0:
+                return(sp0,0,swapped)
+            else:
+                return(0,0,swapped)
+    else:
+        #print("here")
+        return(s0,s1,swapped)
+    
+
+
+def update_spins2(lattice,sp0,maxsp):
+
+    in1 = lattice 
+    cp = np.matrix.copy(in1)
+    cp[in1 != 0] = 1
+    in2 = np.array([[1,1,1],[1,0,1],[1,1,1]]) #8 by 8 grid.
+    out = in1 + np.multiply(scipy.signal.convolve2d(cp, in2,mode='same',boundary='wrap'),cp)
+
+    out[np.where((out == in1) & (out > 0))] = sp0 #where it hasn't increased, make it base
+    out = np.minimum(out,maxsp)
+    return(out)
+
+    
+
+
+def evolve_system_Kawasaki_timer(T,Jpp,Jss,Jps,sp0,ss0,maxsp,d,iterations,lattice,points,i_bleach,d_bleach):
+    
+    sample = 0.25 #fraction of data to take gradient of
+    all_lattices = [lattice]
+    neighbour_options = [[1,1],[1,0],[1,-1],[-1,-1],[-1,0],[-1,1],[0,1],[0,-1]]
+    #lattice = all_lattices[-1]
+    energies = [get_energy2(lattice,Jpp,Jss,Jps,d)]
+    gradients = []
+    bleached = []
+    all_bleached = [[]]
+    bleach_ratio = 1
+
+    for i in range(0,iterations):
+
+            
+            
+            
+        #print(lattice)
+        lattice = update_spins2(lattice,sp0,maxsp)
+        X0 = np.random.choice(lattice.shape[0])
+        Y0 = np.random.choice(lattice.shape[1])
+        
+        #pick a neighbour
+        X1,Y1 = neighbour_options[np.random.choice(len(neighbour_options), 1)[0]]
+        X1  = (X0 + X1)%d
+        Y1 = (Y0 + Y1)%d
+
+        #if lattice[X0,Y0] != lattice[X1,Y1]: #if they have the same magnitude
+        lattice[X0,Y0],lattice[X1,Y1],swapped = do_swap(T,Jpp,Jss,Jps,X0,Y0,X1,Y1,d,lattice,sp0,ss0)
+        if swapped:
+            
+            if (X0,Y0) in bleached:
+                
+                
+                if (X1,Y1) not in bleached: #then new bleached value is at X1,Y1 
+                    
+                    bleached[bleached.index((X0,Y0))] = (X1,Y1)
+                    
+            elif (X1,Y1) in bleached:
+                bleached[bleached.index((X1,Y1))] = (X0,Y0)
+                
+       # print(i,math.floor(iterations/points), i%math.floor(iterations/points),len(bleached) )
+        if i%math.floor(iterations/points) == 0:
+            if len(bleached) == 0:
+                all_bleached.append([])
+            else:
+                temp = np.copy(bleached)
+                all_bleached.append(temp)
+            #energies.append(get_energy2(lattice,Jpp,Jss,Jps,d))
+            all_lattices.append(lattice.copy())
+            x = math.floor(len(energies)*(1 - sample)) #is where we are starting measuring the gradient from
+            #if len(energies) > 100:
+            if len(energies[x:]) > 5: #if there is enough to make a regression
+                gradients.append((np.polyfit([xx for xx in range(0,len(energies[x:]))]
+                    ,energies[x:],1))[0])
+                #print(len(energies),len(energies[x:]))
+    return(all_lattices,energies,gradients,all_bleached,bleach_ratio)
+
+
+def build(T,d,drop_radius,sp0,maxsp):
+   
+    
+    lattice = np.zeros(shape=(d, d),dtype='int') 
+    c = [math.floor(d/2),math.floor(d/2)]
+    for point in [n for n in filter(None,
+        [a[0] if math.sqrt((a[0][0]-c[0])**2 + (a[0][1]-c[1])**2)<drop_radius else None for a in np.ndenumerate(lattice)])]:
+        lattice[point[0],point[1]] = sp0
+
+    return(lattice)
+
+
+
+def do_run(d,drop_radius,spin_to_step,T,J,points,iterations,maxsp,i_bleach,d_bleach):
+    
+    #spin_to_step = 1
+    #T = 10000
+    #d = 20
+    #drop_radius = 5
+    #J = 1
+    Jpp = J/spin_to_step**2
+    Jss = J/spin_to_step**2
+    Jps = J/spin_to_step**2
+    sp0 = spin_to_step
+    ss0 = -spin_to_step
+    #points = 100
+    #iterations = 1000
+
+    maxsp = math.floor(maxsp*spin_to_step) #maximum spin protein can have
+
+    lattice = build(T,d,drop_radius,sp0,maxsp)
+    #print(lattice)
+
+
+
+
+    all_lattices,energies,gradients,all_bleached,bleach_ratio = evolve_system_Kawasaki_timer(T,Jpp,Jss,Jps,sp0,ss0,maxsp,d,iterations,lattice,points,i_bleach,d_bleach)
+    print("---")
+   # print("num bleached", len(bleached))
+    print("d,drop_radius,spin_to_step,T,J,points,iterations,maxsp",d,drop_radius,spin_to_step,T,J,points,iterations,maxsp)
+    #with np.printoptions(threshold=np.inf):
+        #print(all_lattices)
+    return(all_lattices,all_bleached,bleach_ratio)
+#plt.matshow(all_lattices[-1])
+
+d = 50
+spin_to_step = 1 #1000000
+J = 1
+points = 1 #number of samples
+iterations = 1 #actual number of steps
+maxsp = 1
+i_bleach = 0
+d_bleach = 10
+results = []
+temperatures = [1,2,2.5,2.7,5]
+for T in temperatures: #good T here was 0.44
+    for drop_radius in [20]:
+        all_lattices,all_bleached,bleach_ratio = do_run(d,drop_radius,spin_to_step,T,J,points,iterations,maxsp,i_bleach,d_bleach)
+        results.append(all_lattices)
+#print(energies)
+bleached_lattice = np.copy(all_lattices)
+for ii in range(0,len(all_lattices)):
+    for x,y in all_bleached[ii]:
+        
+        bleached_lattice[ii][x,y] = -1
+plt.imshow(bleached_lattice[-1])
+plt.colorbar()
+
+
+
+
+
+def build_lattice(d,drop_diameter,nspins,Jpp,Jps,Jss,Jstep,P_initial,randomise_initial=True):
+    #we want one matrix to track the spins
+    
+    
+    
+    
+    
+    pairs = [(1,0),(1,-1),(1,1),(0,1),(0,-1),(-1,1),(-1,-1),(-1,0)]
+    drop_radius = int(drop_diameter/2)
+    c = int(d/2)
+    if d/2 == int(d/2):
+        print("Need odd lattice size")
+        
+    spins = [[np.ones(nspins,dtype= np.int32)*np.random.choice([0,1],p=[(P_initial-1)/P_initial,1/P_initial]) for i in range(0,d)] for j in range(0,d)]
+    spin_ids = [[np.zeros(nspins,dtype= np.int32) for i in range(0,d)] for j in range(0,d)]
+    
+    lattice = [[np.zeros(nspins,dtype= np.int32) if i%3 == 0 else None for i in range(0,3*d)] if j%3==0 else 
+               [None for i in range(0,3*d)] for j in range(0,3*d)]
+
+    #now make droplet (at full saturation)
+    spinid = 1
+    for i in range(0,d):
+        for j in range(0,d):
+                    if drop_radius > 0:
+                        if math.sqrt((i - c)**2 + (j - c)**2) <= drop_radius:
+                        
+                            spins[i][j] = np.ones(nspins,dtype= np.int32) #this sets any spin to a 1.
+                            #we don't want 1 but a randomly chosen number between 1 and the next number
+                            if randomise_initial:
+                                spins[i][j] *= np.random.randint(1,Jstep)
+    for i in range(0,d):
+        for j in range(0,d):
+            spin_ids[i][j] = np.arange(spinid,spinid+nspins)
+            spinid += nspins
+    
+    for element in np.ndenumerate(spins):
+        
+        i,j,e = element[0]
+        
+        
+            
+        [J1,J2,J3,J4,J5,J6,J7,J8] = [construct_coupling(spins[i][j],spins[np.fmod(i + pair[0],d)][np.fmod(j + pair[1],d)],Jpp,Jps,Jss) for pair in pairs]
+
+        for pair,JJ in zip(pairs,[J1,J2,J3,J4,J5,J6,J7,J8]):
+            #print(i,j,pair,np.fmod(i + pair[0],d*3),np.fmod(j + pair[1],d*3) )
+            #print(i,j,pair,np.fmod(i + 2*pair[0],d*3),np.fmod(j + 2*pair[1],d*3) )
+            lattice[np.fmod(i*3 + pair[0],d*3)][np.fmod(j*3 + pair[1],d*3)] = JJ
+            lattice[np.fmod(i*3 + 2*pair[0],d*3)][np.fmod(j*3 + 2*pair[1],d*3)] = np.transpose(JJ) #v important
+        J0 = construct_coupling(spins[i][j],spins[i][j],Jpp,Jps,Jss,diag=True)
+        lattice[i*3][j*3] = J0
+    return(spins,lattice,spin_ids,spinid)
+                            
+                
+
+        
+#we can show this as a density:
+
+     #   print(i,j,spins[i][j])
+#plot_spin_densities(lattice,d)
+
+def construct_coupling(element1,element2,Jpp,Jps,Jss,diag = False):
+
+    J = np.zeros((len(element1),len(element1)),dtype= np.int32)
+    for i in range(0,len(element1)):
+        for j in range(0,len(element2)):
+            if diag:
+                if i == j:
+                #no self coupling of a protein
+                    continue
+            s0 = element1[i]
+            s1 = element2[j]
+            if s0*s1 == 0: #then at least one solvent
+                if s0 != s1:
+                    J[i,j] = Jps
+                else:
+                    J[i,j] = -Jss
+            else:
+                J[i,j] = -Jpp
+            #print("here",s0,s1)
+    return(J)
+
+
+
+#----------------------------------------------------------
+def do_Kawasaki_Ising_Tensor(lattice,spins,spin_ids,d,T,iterations,i_eq,points,maturation_ratio,delta,nspins,max_id,Jpp,Jpp_max,Jstep):
+    #spins will record the last time (iteration) when the environment was updated. The environment
+    #gets updated when we need to measure the energy only.
+    print("Temperature", T)
+    #print("to test", spins)
+    pcoords = (np.where(spin_ids != np.zeros(nspins,dtype= np.int32)))
+    nproteins = len(pcoords[0])
+    if nproteins == 0:
+        print("No proteins - nothing happens")
+        return()
+    #print("herep",pcoords[0],pcoords[1])
+    
+    increment = int(iterations/points)
+    #print("i",increment)
+    all_lattices = []
+    all_spins = []
+    all_spin_ids = []
+    #num_spins = (len(np.where((np.array(spin_ids,dtype=object) != None) & (np.array(spin_ids,dtype=object) != np.array([0])))[0]))
+    crossed = [[] for i in range(0,max_id)]
+    paths = [np.array([0,0]) for i in range(0,max_id)]
+    returned = [[] for i in range(0,max_id)]
+    #print("crossed",crossed)
+    pairs3 = [(3,0),(3,-3),(3,3),(0,3),(0,-3),(-3,3),(-3,-3),(-3,0)]
+    pairs = [(1,0),(1,-1),(1,1),(0,1),(0,-1),(-1,1),(-1,-1),(-1,0)]
+    pairs4 = [(1,1),(1,0),(1,-1),(0,-1)]
+    for iteration in range(0,iterations+1):
+        #if len(all_lattices) > 1:
+        #lattice,spins = mature(iteration,lattice,spins,Jpp_max)
+        if (iteration%increment == 0) or (iteration == 0) or (iteration == iterations):
+            
+            #lattice,spins = mature(iteration,i_eq,lattice,spins,Jpp_max)
+            
+            
+            
+            print(iteration,100*(iteration)/(iterations), " % done, ")
+            copy_lattice = [[np.zeros(nspins,dtype= np.int32) if i%3 == 0 else None for i in range(0,3*d)] if j%3==0 else 
+               [None for i in range(0,3*d)] for j in range(0,3*d)]
+            copy_spins = [[np.zeros(nspins,dtype= np.int32)  for i in range(0,d)] for j in range(0,d)]
+            copy_spin_ids = [[np.zeros(nspins,dtype= np.int32)  for i in range(0,d)] for j in range(0,d)]
+            for i in range(0,3*d):
+                for j in range(0,3*d):
+                    copy_lattice[i][j] = -lattice[i][j].copy()
+                    if i%3 == 0:
+                        if j%3 == 0:
+                            copy_spins[int(i/3)][int(j/3)] += spins[int(i/3)][int(j/3)] #np.sum(spins[i][j])
+                            copy_spin_ids[int(i/3)][int(j/3)] += spin_ids[int(i/3)][int(j/3)]
+                            
+            all_lattices.append(copy_lattice)
+            all_spins.append(copy_spins)
+            all_spin_ids.append(copy_spin_ids)
+        
+       
+        #i0,j0 = 3*np.random.randint(0,d,size=2)
+        random_protein = np.random.randint(0,nproteins)
+        i0 = pcoords[0][random_protein]
+        j0 = pcoords[1][random_protein]
+       # print(i0, j0, "i,j")
+        #change the above line to be out of spin locations
+        
+        #select random element within site
+        elements = np.random.randint(0,nspins,2)
+        #select random neighbour
+        neighbour = pairs[np.random.randint(0,8)]
+        i1 = i0 + neighbour[0]
+        j1 = j0 + neighbour[1]
+        
+        
+        
+        
+        #if (spins[i0][j0][elements[0]] == 0) and (spins[np.fmod(i1,3*d)][np.fmod(j1,3*d)][elements[1]] == 0):
+            #continue
+        
+        if iteration%maturation_ratio == 0:
+            #print("here - maturing - error!")
+            if neighbour[0] >= 0:
+                highi = i1
+                lowi = i0
+            else:
+                highi = i0
+                lowi = i1
+            if neighbour[1] >= 0:
+                highj = j1
+                lowj = j0
+            else:
+                highj = j0
+                lowj = j1
+            
+            boundaries = [lowi,highi,lowj,highj]
+            
+            lattice,spins = mature(iteration,i_eq,lattice,spins,Jpp_max,Jstep,nproteins,boundaries)
+            
+        
+        i1 = np.fmod(i1,d)
+        j1 = np.fmod(j1,d)
+
+        
+        #print("spins: ", spins[i0][j0][elements[0]], spins[i1][j1][elements[1]])
+        E0u = get_energy(i0,j0,elements[0],nspins,lattice,spins,Jpp,d,swapped=False)
+        E1u = get_energy(i1,j1,elements[1],nspins,lattice,spins,Jpp,d,swapped=False)
+        
+        #E0s is the energy in lattice site i0,j0,elements[0] if we have spin with value i1,j1 swapping in.
+        E0s = get_energy(i0,j0,elements[0],nspins,lattice,spins,Jpp,d,newspin=np.sign(spins[i1][j1][elements[1]]),swapped=True)
+        E1s = get_energy(i1,j1,elements[1],nspins,lattice,spins,Jpp,d,newspin=np.sign(spins[i0][j0][elements[0]]),swapped=True)
+       # print("Energies",E0u,E1u,E0s,E1s)
+       # print(i0,j0,spins[i0][j0], " swapping with ", i1,j1,spins[i0][j0],"before: ", E0u, E1u, " after: ", E0s,E1s)
+        E_unswapped = E0u + E1u
+        E_swapped = E0s + E1s
+        #P_negligable = 1e-10
+        #P_unswapped = math.exp(min([-E_unswapped/T,200]))
+        
+       # if 1 - P_unswapped < P_negligable:
+            #continue
+        unswapped_exponent = -E_unswapped/T
+        if unswapped_exponent > 200:
+            continue
+        else:
+            P_unswapped = math.exp(unswapped_exponent)
+            
+        swapped_exponent = -E_swapped/T
+        if swapped_exponent > 200:
+            continue
+        else:
+            P_swapped = math.exp(swapped_exponent)
+        
+        sumP = P_swapped + P_unswapped
+        
+        
+       # print(E_unswapped,P_unswapped,E_swapped,P_swapped,unswapped_exponent,swapped_exponent,Jpp)
+        if sumP == 0:
+            
+            continue
+        #------
+        if np.random.rand() < (P_swapped/P_unswapped):
+           # print("swap!", P_swapped/sumP)
+            
+            
+            v1 = spins[i0][j0]
+            v2 = spins[i1][j1]
+            #if they were both proteins then don't need to do anything
+            if spins[i1][j1][elements[1]] == 0:
+                #print("it is a gas")
+                pcoords[0][random_protein] = i1
+                pcoords[1][random_protein] = j1
+            #firstly, easily, the protein we selected goes to i1,j1
+            
+            #now, less easily, the other one will still feature if it was a protein.
+            
+            
+            #then swap, may involve a cross.
+           # print("then swap - iteration: ", iteration, E_unswapped,E_swapped,E0u,E1u,E0s,E1s)
+            
+            temp1 = np.copy(v1[elements[0]])
+            temp2 = np.copy(v2[elements[1]])
+            v1[elements[0]] *= 0
+            v1[elements[0]] += temp2
+            v2[elements[1]] *= 0
+            v2[elements[1]] += temp1
+            a = spin_ids[i0][j0][elements[0]]
+            b = spin_ids[i1][j1][elements[1]]
+            spin_ids[i0][j0][elements[0]] = b
+            spin_ids[i1][j1][elements[1]] = a
+            #we have now swapped 
+            
+            if ((i1 - i0)**2 + (j1 - j0)**2) > 2:
+                
+                #then swapped over the border
+                pathv = [0,0]
+                if (i1 - i0)**2 > 1:
+                    pathv[0] = -np.sign(i1-i0)
+                if (j1 - j0)**2 > 1:
+                    pathv[1] = -np.sign(j1-j0)
+                #print("pathv",spin_ids[i0][j0][elements[0]], spin_ids[i1][j1][elements[1]],i0/3,i1/3,j0/3,j1/3,pathv, iteration)
+                
+                
+                if spin_ids[i0][j0][elements[0]] > 0:
+                    crossed[spin_ids[i0][j0][elements[0]]].append(iteration)
+                    paths[spin_ids[i0][j0][elements[0]]] += np.array(pathv)
+                    returned[spin_ids[i0][j0][elements[0]]].append(np.copy(paths[spin_ids[i0][j0][elements[0]]]))
+                
+                if spin_ids[i1][j1][elements[1]] > 0:
+                    crossed[spin_ids[i1][j1][elements[1]]].append(iteration)
+                    paths[spin_ids[i1][j1][elements[1]]] -= np.array(pathv)
+                    returned[spin_ids[i1][j1][elements[1]]].append(np.copy(paths[spin_ids[i1][j1][elements[1]]]))
+  
+            for pair in pairs: #for each surrounding J
+                #for each pair
+                for i in range(0,nspins): #for the J's closest to i0,j0
+                    
+                    
+                    lattice[np.fmod(3*i0 + pair[0],3*d)][np.fmod(3*j0 + pair[1],3*d)][elements[0],i] += -lattice[np.fmod(3*i0 + pair[0],3*d)][np.fmod(3*j0 + pair[1],3*d)][elements[0],i] - np.sign(v1[elements[0]])*np.sign(spins[np.fmod(i0 + pair[0],d)][np.fmod(j0 + pair[1],d)][i])*Jpp 
+                   
+                    lattice[np.fmod(3*i1 + pair[0],3*d)][np.fmod(3*j1 + pair[1],3*d)][elements[1],i] += -lattice[np.fmod(3*i1 + pair[0],3*d)][np.fmod(3*j1 + pair[1],3*d)][elements[1],i] - np.sign(v2[elements[1]])*np.sign(spins[np.fmod(i1 + pair[0],d)][np.fmod(j1 + pair[1],d)][i])*Jpp
+                    
+           
+    #print("paths",paths)
+    return(all_spins,all_lattices,all_spin_ids,crossed,returned)
+
+def get_energy(i,j,element,nspins,lattice,spins,Jpp,d,newspin=1,swapped=False):
+    #print("is it swapped?", swapped)
+   # print("new spin?", newspin)
+    #this gives the energy for spin at i,j,element
+   # print("spin",spins[np.fmod(i,d*3)][np.fmod(j,d*3)])
+    if newspin == 0:
+        #then no interaction energy
+        return(0)
+    energy = 0
+    #if just swapped, there is a simpler trick. It's just the number of spins around it.
+    if swapped:
+        for pair in [(0,0),(1,0),(1,-1),(1,1),(0,1),(0,-1),(-1,1),(-1,-1),(-1,0)]: #for each interacting site
+            #print("pair", pair, "spins",spins[np.fmod(i + 3*pair[0],d*3)][np.fmod(j + 3*pair[1],d*3)]) 
+            energy += np.sum(np.sign(spins[np.fmod(i + pair[0],d)][np.fmod(j + pair[1],d)]))
+        #print("swapped: gave energy, ", energy)
+        return((energy-1)*Jpp) #add one because no self interaction
+    else:
+        #print("not swapped")
+        for pair in [(0,0),(1,0),(1,-1),(1,1),(0,1),(0,-1),(-1,1),(-1,-1),(-1,0)]:
+            #print("energy is now: ", energy)
+            #summing over ever row of the J's immediately surrounding the site
+            energy -= np.sum(lattice[np.fmod(3*i + pair[0],3*d)][np.fmod(3*j + pair[1],3*d)][element])
+        
+            
+        return(energy)
+
+def visualise_lattice(lattice, d,show=False,delta=1,maxJ=False):
+    M =  -12000
+    strengths = set()
+    all_visualised = np.zeros((3*d,3*d))
+    #print(all_visualised)
+    for i in range(0,3*d):
+        for j in range(0,3*d):
+            J = np.sum(lattice[i][j])
+            strengths.add(J)
+            if (i%3 == 0) and (j%3 ==0):
+                    #then it's a spin
+                if maxJ:
+                    all_visualised[i][j] = max(np.sum(J),M)
+                else:
+                    all_visualised[i][j] = np.sum(J)
+            else:
+                #it's a coupling constant
+                if maxJ:
+                    all_visualised[i][j] = max(np.sum(J),M)
+                else:
+                    all_visualised[i][j] = np.sum(J)
+    if show:
+        plt.imshow(all_visualised)
+        plt.colorbar()
+        print(strengths)
+    else:
+        return(all_visualised)
+    
+def visualise_energies(lattice, d,Jmax,show=False,delta=1,maxJ=False):
+   # M =  -12000
+    strengths = set()
+    all_visualised = np.zeros((3*d,3*d))
+    #print(all_visualised)
+    for i in range(0,3*d):
+        for j in range(0,3*d):
+            J = np.sum(lattice[i][j])
+            strengths.add(J)
+            if (i%3 == 0) and (j%3 ==0):
+                    #then it's a spin
+                if maxJ:
+                    all_visualised[i][j] = max(np.sum(J),M)
+                else:
+                    all_visualised[i][j] = np.sum(J)
+            else:
+                #it's a coupling constant
+                if maxJ:
+                    all_visualised[i][j] = max(np.sum(J),M)
+                else:
+                    all_visualised[i][j] = np.sum(J)
+                    
+    energies = np.zeros((d,d))
+    for i in range(0,3*d):
+        for j in range(0,3*d):
+            if (i%3 == 0) and (j%3 ==0):
+                for pair in [(0,0),(1,0),(1,-1),(1,1),(0,1),(0,-1),(-1,1),(-1,-1),(-1,0)]:
+                    energies[int(i/3)][int(j/3)] += all_visualised[np.fmod(i + pair[0],3*d)][np.fmod(j + pair[1],3*d)]
+    
+    if show:
+        plt.imshow(energies,vmin=8*Jmax,vmax=0)
+        plt.colorbar()
+        print(strengths)
+    return(energies)
+    
+    
+#now make the coupling matricies
+
+
+def plot_energies(lattice,spins,d,Jmax,show=True):
+    nspins = len(lattice[0][0])
+    print("nspins", nspins)
+    maxE = 1
+    total_energy = 0
+    Evalues = set()
+    energy_lattice = np.zeros((d,d))
+    for i in range(0,3*d,3):
+        for j in range(0,3*d,3):
+
+            for element in range(0,nspins):
+
+                E = get_energy(i,j,element,nspins,lattice,spins,Jpp,d)
+                Evalues.add(E)
+                energy_lattice[int(i/3),int(j/3)] += E
+                total_energy += E
+                
+    if show:
+        #print("Total Energy = ", total_energy,", Energies = ", Evalues)
+        plt.matshow(energy_lattice, vmin=Jmax*8, vmax=0)
+        plt.colorbar()
+    else:
+        return(energy_lattice)
+
+def mature(iteration,i_eq,lattice,spins,Jpp_max,Jstep,nproteins,boundaries=None):
+   # print("maturing off", iteration)
+   # return(lattice,spins)
+    if iteration < i_eq:
+        Jstep = 100
+        #return(lattice,spins)
+    #else:
+        
+    #iteration = iteration-i_eq
+    
+    #define mature on the spin lattice
+    
+    d = len(spins)
+    if boundaries == None:
+
+        icoords = [i for i in range(0,d)]
+        jcoords = [j for j in range(0,d)]
+
+    else:
+        
+        #we need to allocate icoords
+        
+        il = boundaries[0]-1
+        ih = boundaries[1]+1
+        jl = boundaries[2]-1
+        jh = boundaries[3]+1
+        
+        icoords = list(set([np.mod(i,d) for i in range(il,ih+1)]))
+        jcoords = list(set([np.mod(j,d) for j in range(jl,jh+1)]))
+    #print("boundaries: ", boundaries, icoords,jcoords)
+    
+
+    #now set up d_mature_matrix which 
+    d_mature_matrix = [[np.zeros(nspins,dtype= np.int32) for j in range(0,len(jcoords))] for i in range(0,len(icoords))]
+    
+    for i_ in range(0,len(icoords)):
+        for j_ in range(0,len(jcoords)):
+            i = icoords[i_]
+            j = jcoords[j_]
+            
+            d_mature_matrix[i_][j_] = np.maximum(int((iteration-spins[i][j])/nproteins),0)
+    #print("d_mat", iteration,d_mature_matrix)
+    #print(sdgkjsg)
+    if np.sum(d_mature_matrix) == 0:
+        #then nothing to do this timestep
+        return(lattice,spins)
+   
+   
+    pairs4 = [(1,1),(1,0),(1,-1),(0,-1)]
+
+    #first fix all the spins
+    
+    for i_ in range(0,len(icoords)):
+        for j_ in range(0,len(jcoords)):
+            i = icoords[i_]
+            j = jcoords[j_]  
+           # dmature = np.maximum(iteration-spins,0)
+            if np.sum(d_mature_matrix[i_][j_]) != 0: #then this site is not up to date, need to grow
+                spins[i][j] = np.clip(spins[i][j],0,1)*max(iteration,1)
+                #now do self lattice.
+                #lattice[i][j] += -d_mature_matrix[i_][j_]*np.outer(np.sign(spins[i][j]),np.sign(spins[i][j])) #because we are using spins
+                #to record info about when last updated.
+                #but fill in the diagonals with 0 since no self-interaction
+                v1 = spins[i][j]
+                if len(v1) > 1:
+                    to_add = np.outer(np.sign(v1),np.sign(v1))
+                    lattice[i][j] += -lattice[3*i][3*j] + np.minimum(np.multiply(d_mature_matrix[i_][j_],to_add) + lattice[3*i][3*j],Jpp_max)
+                    np.fill_diagonal(lattice[3*i][3*j],0)
+                #lattice[i][j] = np.minimum(lattice[i][j],Jpp_max)
+ 
+                
+                
+                
+    #spins now fixed, now do the environments
+    for i_ in range(0,len(icoords)):
+        for j_ in range(0,len(jcoords)):
+            i = icoords[i_]
+            j = jcoords[j_]  
+            if np.sum(d_mature_matrix[i_][j_]) != 0:
+                #continue
+
+                for k in range(0,len(pairs4)): #each lattice site will only be treated once
+
+                    neighbour = pairs4[k]
+                    v1 = spins[i][j]
+                    v2 = (spins[np.fmod(i + neighbour[0],d)][np.fmod(j + neighbour[1],d)])
+                    J12 = (lattice[np.fmod(3*i + neighbour[0],3*d)][np.fmod(3*j + neighbour[1],3*d)])
+                    
+                    if (v1.all() != 0) and (v2.all() != 0):
+
+                    #    to_add = Jstep*np.outer(np.sign(v1),np.sign(v2))
+                    
+                    #this is the problem line if we start with negative numbers for the spin
+                        to_add = Jstep*np.outer(np.sign(v1),np.sign(v2))
+                        
+                       # print("v1,v2,to_add,outer,dmat,J12",v1,v2,to_add,np.outer(v1,v2),d_mature_matrix[i][j],J12)
+                       # print("n", neighbour,v1,v2)
+                       # print("before",lattice[np.fmod(i+neighbour[0],d)][np.fmod(j + neighbour[1],d)])
+                        lattice[np.fmod(3*i+neighbour[0],3*d)][np.fmod(3*j + neighbour[1],3*d)] += -lattice[np.fmod(3*i+neighbour[0],3*d)][np.fmod(3*j + neighbour[1],3*d)] + np.minimum(np.multiply(d_mature_matrix[i_][j_],to_add) + lattice[np.fmod(3*i+neighbour[0],3*d)][np.fmod(3*j + neighbour[1],3*d)],Jpp_max)
+                        #print("after",lattice[np.fmod(i+neighbour[0],d)][np.fmod(j + neighbour[1],d)])
+    return(lattice,spins)
+
+
+
+def get_spin_densities(all_spins,iteration,density_values,nspins):
+    Q = 0
+    d = len(all_spins[0])
+   # print("d  = ", d)
+    #defined on the bigger 3x lattice.
+    #density_values = 30 #this is how many points on the graph
+
+    spins = all_spins[iteration]
+
+    #Take center point and measure the average value of the sites around it. Plot this
+    densities = [0]*d**2
+    distances = [0]*d**2
+    k = 0
+
+    c = [math.floor(d/2),math.floor(d/2)]
+    #print(test_lattice[c[0],c[1]])
+    for i in range(0,d):
+        for j in range(0,d):
+            distances[k] = math.sqrt((i - c[0])**2 + (j - c[1])**2)
+            densities[k] = np.sum(np.minimum(spins[i][j],1)) #*len(test_lattice[i][j]))
+            k += 1
+    mean_density = sum(densities)/len(densities)
+    
+    densities = [x for _, x in sorted(zip(distances, densities))]
+    distances = sorted(distances)
+    
+    
+    averaged_distances = [max(distances)/density_values*i for i in range(0,density_values)]
+    #print(averaged_distances)
+    averaged_densities = [0]*density_values
+    #print("here", averaged_densities,density_values,averaged_distances)
+    total_count = 0
+    for i in range(0,density_values-1):
+
+        j = 0
+        count = 0
+        while distances[j] < averaged_distances[i+1]:
+            if (distances[j] >= averaged_distances[i]):
+                count += nspins
+                averaged_densities[i] += densities[j]
+            j += 1
+        #print("count",count,averaged_densities[i])
+        if count != 0:
+            total_count += count
+            averaged_densities[i] /= count
+            if averaged_densities[i] > mean_density:
+                Q += count*averaged_densities[i]
+
+    Q = Q/sum(densities)
+    if Q == 1:
+        return(averaged_distances[:-2],averaged_densities[:-2],1E6)
+    else:
+        Q = Q/(1. - Q)
+        return(averaged_distances[:-2],averaged_densities[:-2],Q)
+
+#get_spin_densities_bleached(all_spins,i,density_values,nspins,d_bleach,bleached_spins,spin_ids,frame,frame_bleach,crossed)
+
+#def get_spin_densities_bleached(all_spins,iteration,density_values,nspins,d_bleach,bleached_spin_ids,spin_ids,frame,frame_bleach,crossed):
+def get_spin_densities_bleached(spins,spin_ids,crossed,returned,d,d_bleach,frame,frame_bleach,bleached_spin_ids,density_values):
+    
+    Q = 0
+    
+
+    #Take center point and measure the average value of the sites around it. Plot this
+    densities = [0]*d**2
+    distances = [0]*d**2
+    k = 0
+    
+    ids_pb,reset = build_bleached_reset(spins,d_bleach,bleached_spin_ids,spin_ids,frame,frame_bleach,crossed,returned)
+   # print("here, reset", ids_pb)
+    c = [math.floor(d/2),math.floor(d/2)]
+    #print("centre: ", c)
+    #print(test_lattice[c[0],c[1]])
+    for i in range(0,d):
+        for j in range(0,d):
+            distances[k] = math.sqrt((i - c[0])**2 + (j - c[1])**2)
+            
+            if (spin_ids[i][j] in reset) or (spin_ids[i][j] not in ids_pb) or (frame <= frame_bleach):
+                #print("here")
+           # if i%3 == 0 :
+                #if j%3 == 0:
+                densities[k] = np.sum(np.minimum(spins[i][j],1))
+            else:
+                #print("here",np.sum(np.minimum(spins[i][j],1)) )
+                densities[k] = 0*np.sum(np.minimum(spins[i][j],1))
+           # densities[k] = np.sum(np.minimum(spins[i][j],1)) #*len(test_lattice[i][j]))
+            k += 1
+    #print("this gives", densities)
+    mean_density = sum(densities)/len(densities)
+    
+    densities = [x for _, x in sorted(zip(distances, densities))]
+    distances = sorted(distances)
+    #print("raw den:", densities)
+    #print("raw dis:", distances)
+    
+    averaged_distances = [max(distances)/density_values*i for i in range(0,density_values)]
+    #print(averaged_distances)
+    averaged_densities = [0]*density_values
+    #print("here", averaged_densities,density_values,averaged_distances)
+    total_count = 0
+    for i in range(0,density_values-1):
+
+        j = 0
+        count = 0
+        while distances[j] < averaged_distances[i+1]:
+            if (distances[j] >= averaged_distances[i]):
+                
+                count += nspins
+                averaged_densities[i] += densities[j]
+            j += 1
+        #print("count",count,averaged_densities[i])
+        
+        if count != 0:
+            total_count += count
+            averaged_densities[i] /= count
+            
+       # print("distances:", averaged_distances)
+        #print("densities:", averaged_densities)
+        #return(averaged_distances[:-2],averaged_densities[:-2],1E6)
+        
+        
+        
+        if averaged_densities[i] > mean_density:
+            Q += count*averaged_densities[i]
+    if sum(densities) == 0:
+        return(averaged_distances[:-2],averaged_densities[:-2],1E6)
+    Q = Q/sum(densities)
+    if Q == 1:
+        return(averaged_distances[:-2],averaged_densities[:-2],1E6)
+    else:
+        Q = Q/(1. - Q)
+        return(averaged_distances[:-2],averaged_densities[:-2],Q)
+
+    
+    
+    
+def build_bleached_reset(spins,d_bleach,bleached_spin_ids,spin_ids,frame,frame_bleach,crossed,returned):
+    #print(spin_ids)
+    c = int(len(spins)/2) #this is the center
+    bleach_radius = int(d_bleach/2)
+    mask = np.zeros_like(spins)
+    
+    for i in range(0,len(spins)):
+        for j in range(0,len(spins)):
+            if math.sqrt((i-c)**2 + (j-c)**2) > bleach_radius:
+                mask[i][j] = 1
+    
+    
+    
+    #iteration1 = t_pb*int(iterations/points)
+        
+        #print("t_pb",iteration)
+    ids_pb = np.ma.masked_array(bleached_spin_ids, mask)
+    ids_t2 = spin_ids #np.ma.masked_array(spin_ids, mask)
+    #print("here123", ids_t2)
+    in_region = np.intersect1d(ids_t2,ids_t2)
+    reset = []
+    #print("here", in_region)
+    if frame > frame_bleach:
+        
+        for spin in in_region:
+            if len(crossed[spin]) > 0: #then may have become unbleached
+                #crossed after bleaching:
+                crossed_after_pb = np.where(np.array(crossed[spin]) > frame_bleach*int(iterations/points))
+                crossed_before_t2 = np.where(np.array(crossed[spin]) <= frame*int(iterations/points))
+                crossed_between_pb_t2 = np.intersect1d(crossed_after_pb,crossed_before_t2)
+
+                if len(crossed_between_pb_t2) > 0:
+                    #print("here", len(returned[spin]))
+
+                    difference = returned[spin][crossed_between_pb_t2[-1]] - returned[spin][crossed_between_pb_t2[0]]
+                    if (np.dot(difference,difference) != 0):
+
+                        reset.append(spin)
+    
+    return(ids_pb,reset)
+
+def plot_spin_densities_bleached(spins,spin_ids,crossed,returned,d,d_bleach,frame,frame_bleach,bleached_spin_ids,show=True):
+    #print("got here")
+    c = int(len(spins)/2) #this is the center
+    bleach_radius = int(d_bleach/2)
+    intensity = 0
+    densities = np.array([[0.0]*d]*d)
+    ids_pb,reset = build_bleached_reset(spins,d_bleach,bleached_spin_ids,spin_ids,frame,frame_bleach,crossed,returned)
+    #print("reset", reset)
+    for i in range(0,d):
+        for j in range(0,d):
+            if (spin_ids[i][j] in reset) or (spin_ids[i][j] not in ids_pb) or (frame <= frame_bleach):
+                
+                #if frame > frame_bleach:
+                    #print("HERE",spin_ids[i][j] in reset, spin_ids[i][j] not in ids_pb )
+           # if i%3 == 0 :
+                #if j%3 == 0:
+                densities[int(i),int(j)] = np.sum(np.minimum(spins[i][j],1))
+                if math.sqrt((i-c)**2 + (j-c)**2) < bleach_radius: 
+                    intensity += int(densities[int(i),int(j)])
+            else:
+                #print("here",np.sum(np.minimum(spins[i][j],1)) )
+                densities[int(i),int(j)] = 0*np.sum(np.minimum(spins[i][j],1))
+            
+   # print("here", frame, np.max(densities), np.min(densities))
+    
+    if show:
+        print("intensity at frame ", frame, intensity)
+        plt.gray()
+        plt.matshow(densities)
+        #mappable = plt.cm.ScalarMappable(cmap='gray')
+
+        #mappable.set_array([0,1])   
+        #plt.colorbar(mappable)
+        plt.axis('off')
+        
+    
+       #plt.colorbar()
+    else:
+        return(densities,intensity)
+
+
+delta = 1 #0.000001 #0.0000001 #0.000022 #0.00001
+J = int(1./delta)
+Jpp = -J*700 #the times two will make it slower hopefully. #the starting value.
+Jps = 0
+Jss = 0
+P_initial = 10
+
+#convention, leave it this way
+Jpp_max = 10*Jpp*-1 #10*Jpp*-1  #20000*J #number of times larger max J is than min J
+
+nspins = 1
+maxE = 1.0 #nspins**2*Jpp_max*8
+#print(maxE)
+
+d = 121
+drop_diameter = 50 #20 #60 #100 #15
+#d = 10 #50 #151 #20 #71 #number of lattice sites per side length - make an odd number so it has a center
+Jstep = 1000*J #420*J #420*J #41 is optimum if you can get it.
+iterations =  300000 #100000 #1000000 #20000000 #3*10**7 #5*10**7 #100000 #100000 #20000000 
+points = 300 #100 #100 #250 #0 #1000 #5000
+increment = int(iterations/points)
+maturation_ratio = 1 #1000  #number of steps before updating spins prior to swap event. (Any swap event gets correct treatment though!)
+T = 14000.0
+print("building")
+spins,lattice,spin_ids,max_id = build_lattice(d, drop_diameter,nspins,Jpp,Jps,Jss,Jstep,P_initial)
+
+print("built")
+#need a time before which no maturation is allowed to happen (i.e delta is set to 0).
+i_eq =  100000 #5000000 #5000000 #first 10000 steps delta = 0
+t_eq = int(points/iterations*i_eq)
+
+#print("here",spins)
+#print(dslkjdsn)
+#print(spins)
+all_spins3,all_lattices3,all_spin_ids3,crossed3,returned3 = do_Kawasaki_Ising_Tensor(lattice,spins,spin_ids,d,T,iterations,i_eq,points,maturation_ratio,delta,nspins,max_id,Jpp,Jpp_max,Jstep)
+
+
+#print(E_unswapped,P_unswapped,E_swapped,P_swapped)
