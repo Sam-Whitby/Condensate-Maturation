@@ -1,0 +1,198 @@
+import numpy as np
+import matplotlib.pyplot as plt
+import math
+
+class Kawasaki:
+    def __init__(self,dimension=10,seed=0,density=0.5,J_mean = 1.0,J_var = 0.0,beta = 1,S_max=10,delta=1):
+        
+        self.dimension = dimension
+        self.density = density
+        self.J_mean = J_mean
+        self.J_var = J_var
+        self.S_max = S_max
+        self.delta = delta
+        #for reproducibility
+        np.random.seed(seed)
+        #first fill lattice with density amount of s = 1 (s=0 denotes solvent)
+        self.lattice = np.zeros((self.dimension,self.dimension),dtype=int)
+        self.protein_number = int(self.density*self.dimension**2)
+        self.beta = beta
+        self.swaps = 0
+        #make a square of root density and randomly add others
+        c = int(self.dimension/2)
+        side_length = np.sqrt(self.protein_number/np.pi )       
+        for i in range(0,self.dimension):
+            for j in range(0,self.dimension):
+                if np.sqrt((i-c)**2 + (j-c)**2) <= side_length:
+                    self.lattice[i,j] = 1
+        #might not be exacltly right - remove/add until correct
+        
+        while np.sum(self.lattice) != self.protein_number:
+            if np.sum(self.lattice) > self.protein_number:
+                #remove a random site where it is 1
+                #print("HERE",)
+                sites = np.where(self.lattice==1)
+                site = np.random.randint(len(sites[0]))
+                self.lattice[sites[0][site],sites[1][site]] = 0
+            elif np.sum(self.lattice) < self.protein_number:
+                sites = np.where(self.lattice==0)
+                site = np.random.randint(len(sites[0]))
+                self.lattice[sites[0][site],sites[1][site]] = 1
+            else:
+                print("ERROR!!")
+        #we can make a dictionary of locations to save time
+        
+        self.locations = dict()
+        self.coordinates = dict()
+        
+        x,y = np.where(self.lattice==1)
+        protein_id = 1
+        for i,j in zip(x,y):
+            self.coordinates[(i,j)] = protein_id
+            self.locations[protein_id] = (i,j)
+            protein_id += 1
+        
+       # print(self.locations)
+        #plt.matshow(self.lattice) 
+        
+        self.neighbours = [np.array([1,-1]),
+                           np.array([1,1]),
+                           np.array([1,0]),
+                           np.array([0,-1]),
+                           np.array([0,1]),
+                           np.array([-1,-1]),
+                           np.array([-1,1]),
+                           np.array([-1,0])]
+        self.J = np.zeros((self.protein_number+1,self.protein_number+1))
+        
+        for protein0 in self.locations.keys():
+            for protein1 in self.locations.keys():
+                if protein0 != protein1:
+                    self.J[protein0,protein1] = self.J_mean + self.J_var*np.random.randn()
+                
+    def set_parameters(self,J_mean = None,J_var = None,beta = None,S_max=None,delta=None):
+        if J_mean != None:
+            self.J_mean = J_mean
+        if J_var != None:
+            self.J_var = J_var
+        if beta != None:
+            self.beta = beta
+        if S_max != None:
+            self.S_max = S_max
+        if delta != None:
+            self.delta = delta
+        
+        params = [self.J_mean,self.J_var,self.beta,self.S_max,self.delta]
+        params_in = [J_mean,J_var,beta,S_max,delta]
+        for i in range(0,len(params)):
+            if params_in != None:
+                params[i] = params_in[i]
+        return()
+        
+                                    
+    def get_energy(self,ci):
+        id_i = self.coordinates.get(ci[0],ci[1])
+        if id_i == None:
+            return(0)
+        si = self.lattice[ci[0],ci[1]]
+        j_coords = np.array([np.array(ci) + n for n in self.neighbours])%self.dimension
+        sj = [self.lattice[j[0],j[1]] for j in j_coords]
+        J_ij = [self.J[id_i,self.coordinates.get((j[0],j[1]),0)]  for j in j_coords]
+        return(-np.sum(np.minimum(si,sj)*self.delta + J_ij))
+    
+    def get_pair_energy(self,id_i,id_j,ci,cj):
+        #print(id_i,id_j,ci,cj)
+        Ei = self.get_energy(ci)
+        Ej = self.get_energy(cj)
+        
+        if id_j != 0:
+            #then need to subtract the energy between sites
+            E_tot = Ei + Ej + self.lattice[ci[0],ci[1]]*self.lattice[cj[0],cj[1]]*self.J[id_i,id_j]
+        else:
+            E_tot = Ei + Ej
+        return(E_tot)
+    
+    def swap(self,id_i,id_j,ci,cj):
+        if id_j == 0:
+            #print(iteration)
+            self.locations[id_i] = tuple(cj)
+            self.coordinates[tuple(cj)] = id_i
+            del self.coordinates[tuple(ci)]
+            self.lattice[cj[0],cj[1]] = 1
+            self.lattice[ci[0],ci[1]] = 0
+
+        else:
+
+            self.locations[id_i] = cj
+            self.locations[id_j] = ci
+            self.coordinates[tuple(cj)] = id_i
+            self.coordinates[tuple(ci)] = id_j
+        
+        
+
+        
+    def evolve_Kawasaki(self,steps):
+        for iteration in range(0,steps):
+            #print(iteration)
+            #pick a random id from locations
+            id_i = 1 + np.random.randint(self.protein_number-1)
+            #print(id_i,self.locations)
+            coord_i = self.locations[id_i]
+            #get a random neighbour (lets do neighbourhood of 8)
+            direction = np.random.randint(8)
+            coord_j = tuple((coord_i + self.neighbours[direction])%self.dimension)
+            id_j = self.coordinates.get(tuple(coord_j),0)
+            
+            E_before = self.get_pair_energy(id_i,id_j,coord_i,coord_j)
+            
+                
+            self.swap(id_i,id_j,coord_i,coord_j)
+            
+            E_after = self.get_pair_energy(id_i,id_j,coord_i,coord_j)
+            
+            #print(E_before,E_after)
+            if np.random.rand() >= np.exp(-self.beta*(E_after - E_before)):
+                #restore lattice values
+                
+                
+                self.swap(id_i,id_j,coord_j,coord_i)
+                
+                
+                    
+            else:
+               # print("swaps",id_i,id_j,self.J[id_i,id_j],(E_after - E_before))
+                self.swaps += 1
+                self.lattice[coord_i[0],coord_i[1]] = 1
+                if id_j == 0:
+                    self.lattice[coord_j[0],coord_j[1]] = 0
+                else:
+                    self.lattice[coord_j[0],coord_j[1]] = 1
+            #update lattice with maturation rule
+            
+            self.lattice = np.minimum(self.lattice+np.sign(self.lattice),self.S_max)
+               
+                
+                
+                
+                
+                
+           
+    def plot(self):
+        #plot the energy of the lattice
+        self.total_energy = np.zeros_like(self.lattice)
+        for i in range(0,self.dimension):
+            for j in range(0,self.dimension):
+                self.total_energy[i,j] = self.get_energy((i,j))
+        #print(self.total_energy)
+        plt.matshow(self.total_energy)
+        plt.colorbar()
+            
+            
+            
+            #pick a random site, which might as well be a protein
+            
+L = Kawasaki(dimension=51,density=0.5,seed=4,J_mean = 1,J_var = 0,beta = 1,S_max=1E9,delta=0)
+L.evolve_Kawasaki(1000)
+L.set_parameters(beta=1,delta=1E-4)
+L.evolve_Kawasaki(100000)
+L.plot()
