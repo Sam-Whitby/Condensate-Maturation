@@ -3,13 +3,17 @@ import matplotlib.pyplot as plt
 import math
 
 class Kawasaki:
-    def __init__(self,dimension=10,seed=0,density=0.5,epsilon_0 = 1.0,J_var = 0.0,J_max = 10.,s_max=100, beta = 1,delta=1):
+    def __init__(self,dimension=10,seed=0,density=0.5,epsilon_0 = 1.0,
+                 J_var = 0.0,J_max = 10.,mode='linear',
+                 s_max=100, beta = 1,delta=1,
+                R = 0.0,nstates=0):
         
         self.dimension = dimension
         self.density = density
         self.epsilon_0 = epsilon_0
         self.J_var = J_var
         
+            
         
         self.J_max = J_max
         self.s_max = int(s_max)
@@ -34,6 +38,7 @@ class Kawasaki:
                     if protein_id <= self.protein_number:
                         self.lattice[i,j] = protein_id
                         self.spins[protein_id] = 0
+                        
                         protein_id += 1
                         
                     
@@ -79,6 +84,28 @@ class Kawasaki:
         r[0,:] = 0
         r[:,0] = 0
         self.J = (np.multiply(self.J_max,r!=0) + self.J_var*r)
+         
+        
+        #now record the position of each potential bond.
+        
+        if mode == 'rugged':
+            self.bond_position = np.zeros_like(self.J,dtype=int)
+            self.bond_dt = np.zeros_like(self.J,dtype=int)
+            self.R = R
+            self.nstates = nstates
+            
+            self.rugged_energies = dict()
+            for p in range(0,2*self.nstates + 1):
+                
+                self.rugged_energies[p] = -(self.J*self.epsilon_0 + (self.J*(1 - self.epsilon_0)*(p-p%2))/(2*self.nstates)) + (p%2)*self.R*(self.J != 0)
+            #how can I efficiently provide the energy landscape for each state.
+            #it's a set of steps of length 2 x nstates
+            #the first is at J*e, the last is at J, and linear
+            #even numbered ones are the previous one + R
+            #so if bond_position is p
+            
+            #(J*e) + (J - J*e)*p/nstates + abs(p%2 - 1)*R
+            
         
         self.snapshots = dict()
         self.snapshot_energies = dict()
@@ -102,21 +129,55 @@ class Kawasaki:
             self.s_max = int(s_max)
         self.delta = 1.0/self.s_max
         
+     
+     
+    def integrate_bond(self,id_i,id_j):
+        #brings a bond up to present state
+        si = self.iterations - self.spins[id_i]
+        sj = self.iterations - self.spins[id_j]
+        delta_t = np.minimum(si,sj) - self.bond_dt[id_i,id_j]
+        #print("dt", delta_t)
         
+        #takes a bond at self.position[id_i,id_j] and evaluates delta_t Monte-Carlo steps
+        p = self.bond_position[id_i,id_j]
+        E = self.rugged_energies[p][id_i,id_j]
+       
+        for iteration in range(0,delta_t):
+            direction = np.random.choice([-1,1])
+            p_new = max(min(p+direction,2*self.nstates),0)
+            
+            E_new = self.rugged_energies[p_new][id_i,id_j]
+           
+            if np.random.rand() < np.exp(-self.beta*(E_new - E)):
+               
+                p = p_new
+                E = E_new
+        self.bond_dt[id_i,id_j] = np.minimum(si,sj) 
+        self.bond_dt[id_j,id_i] = self.bond_dt[id_i,id_j] 
+        #self.spins[id_i] = self.iterations
+        #self.spins[id_j] = self.iterations
+        self.bond_position[id_i,id_j] = p
+        self.bond_position[id_j,id_i] = p
         
                                     
     def get_energy(self,ci):
         id_i = self.lattice[ci[0],ci[1]]
         if id_i == None:
             return(0)
-        si = self.iterations - self.spins[id_i]
+        
         j_coords = np.array([np.array(ci) + n for n in self.neighbours])%self.dimension
         j_ids = [self.lattice[cj[0],cj[1]] for cj in j_coords]
-        sj = [self.iterations - self.spins[id_j] if id_j != 0 else 0 for id_j in j_ids]
         
-        J_ij = [self.J[id_i,id_j]  for id_j in j_ids]
-        E = -np.dot(J_ij,np.minimum(np.minimum(si,sj),self.s_max)*self.delta*(1. - self.epsilon_0) + self.epsilon_0)
-        
+        E = 0
+        for id_j in j_ids:
+            if id_j != 0:    
+                
+                self.integrate_bond(id_i,id_j)
+                #print("integrating",id_i,id_j,self.bond_position[id_i,id_j]) 
+                E += self.rugged_energies[self.bond_position[id_i,id_j]][id_i,id_j]
+        #print("E", E)
+       # E = -np.dot(J_ij,np.minimum(np.minimum(si,sj),self.s_max)*self.delta*(1. - self.epsilon_0) + self.epsilon_0)
+        #print(self.iterations,id_i,"to return", E)
         return(E)
     
     
@@ -138,7 +199,7 @@ class Kawasaki:
             J_ij = self.J[id_i,id_j]
             si = self.iterations - self.spins[id_i]
             sj = self.iterations - self.spins[id_j]
-            E_tot = Ei + Ej + J_ij*(np.minimum(np.minimum(si,sj),self.s_max)*self.delta*(1. - self.epsilon_0) + self.epsilon_0)
+            E_tot = Ei + Ej + self.rugged_energies[self.bond_position[id_i,id_j]][id_i,id_j]
         else:
             E_tot = Ei
             
@@ -165,8 +226,13 @@ class Kawasaki:
             
         
     def get_dE_pair_(self,ci,cj):
+        #this calculates the change in energy if this pair is swapped.
         id_i = self.lattice[ci[0],ci[1]]
         id_j = self.lattice[cj[0],cj[1]]
+        
+        E_i_before = self.get_energy(ci)
+        E_j_before = self.get_energy(cj)
+        
         si_before = self.iterations - self.spins[id_i]
         ai_coords = np.array([np.array(ci) + n for n in self.neighbours])%self.dimension #coordinates adjacent to i
         
@@ -184,18 +250,22 @@ class Kawasaki:
         
         J_i_aj = [self.J[id_i,id_aj]  for id_aj in set(aj_ids).union({id_j}).difference({id_i})]
         
-        E_i_before = -np.dot(J_i_ai,np.minimum(np.minimum(si_before,sai),self.s_max)*self.delta*(1. - self.epsilon_0) + self.epsilon_0)
+     #   E_i_before = -np.dot(J_i_ai,np.minimum(np.minimum(si_before,sai),self.s_max)*self.delta*(1. - self.epsilon_0) + self.epsilon_0)
         E_i_after = -np.sum(J_i_aj)*self.epsilon_0
+      
         
         if id_j != 0:
             J_j_aj = [self.J[id_j,id_aj]  for id_aj in aj_ids]
             sj_before = self.iterations - self.spins[id_j]
             J_j_ai = [self.J[id_j,id_ai]  for id_ai in set(ai_ids).union({id_i}).difference({id_j})]
-            E_j_before = -np.dot(J_j_aj,np.minimum(np.minimum(sj_before,saj),self.s_max)*self.delta*(1. - self.epsilon_0) + self.epsilon_0)
+    #        E_j_before = -np.dot(J_j_aj,np.minimum(np.minimum(sj_before,saj),self.s_max)*self.delta*(1. - self.epsilon_0) + self.epsilon_0)
             
             E_j_after = -np.sum(J_j_ai)*self.epsilon_0
-            bond_between_before = -self.J[id_i,id_j]*(np.minimum(np.minimum(si_before,sj_before),self.s_max)*self.delta*(1. - self.epsilon_0) + self.epsilon_0)
-            bond_between_after = -self.J[id_i,id_j]*self.epsilon_0
+            bond_between_before = self.rugged_energies[self.bond_position[id_i,id_j]][id_i,id_j]
+        #    bond_between_before = -self.J[id_i,id_j]*(np.minimum(np.minimum(si_before,sj_before),self.s_max)*self.delta*(1. - self.epsilon_0) + self.epsilon_0)
+            
+            
+            bond_between_after = self.rugged_energies[0][id_i,id_j]
             #d_bond_between = bond_between_after + bond_between_before
         else:
             E_j_before = 0
@@ -207,6 +277,7 @@ class Kawasaki:
         
        
         dE = (E_i_after + E_j_after - bond_between_after)-(E_i_before + E_j_before - bond_between_before)
+        #print("dE",(E_i_after , E_j_after , bond_between_after),(E_i_before , E_j_before , bond_between_before))
         return dE
     
     def get_total_energy(self):
@@ -214,6 +285,8 @@ class Kawasaki:
         self.total_energy = 1.0*np.zeros_like(self.lattice)
         for i in range(0,self.dimension):
             for j in range(0,self.dimension):
+                
+                
                 self.total_energy[i,j] = self.get_energy((i,j))
          
         self.total_energy /= (-8*self.J_max)
@@ -222,7 +295,7 @@ class Kawasaki:
     def evolve_Kawasaki(self,steps,snapshots=10):
         self.get_total_energy()
         self.snapshots[self.iterations] = np.copy(self.total_energy)
-        self.snapshot_energies[self.iterations] = np.sum(self.total_energy)
+        self.snapshot_energies[self.iterations] = np.sum(self.total_energy)/self.protein_number
         
         if snapshots > 0:
             every = int(steps/snapshots)
@@ -232,11 +305,17 @@ class Kawasaki:
         
         for iteration in range(0,steps+1):
             if (iteration)%every == 0:
-
+                #print("Doing snapshot---------------", iteration)
                 self.get_total_energy()
                 self.snapshots[self.iterations] = np.copy(self.total_energy)
-                self.snapshot_energies[self.iterations] = np.sum(self.total_energy)
+                self.snapshot_energies[self.iterations] = np.sum(self.total_energy)/self.protein_number
             #pick a random id from locations
+            
+            #evolve all active bonds by 1 step
+            #I could just evolve all bonds by one step and if a swap occurs, reset those ones
+            direction = np.random.choice([-1,1],size=(len(L.bond_position),(len(L.bond_position))))
+            
+            
             id_i = 1 + np.random.randint(self.protein_number-1)
             #print(id_i,self.locations)
             coord_i = self.locations[id_i]
@@ -248,18 +327,21 @@ class Kawasaki:
             
             dE = self.get_dE_pair_(coord_i,coord_j)
             
-            #print("gives", dE)
+            #print(iteration,coord_i,coord_j,"gives", dE)
             
             
                 
             
             if np.random.rand() <  np.exp(min(-self.beta*(dE),0)):
                 #print(iteration,"Swap",coord_i,coord_j)
-                
+                #print("swap")
+                self.swaps += 1
                 
                 self.swap(coord_i,coord_j)
                 self.spins[id_i] = self.iterations
                 self.spins[id_j] = self.iterations
+                self.bond_position[id_i,:] = 0 #reset all their interactions
+                self.bond_position[id_j,:] = 0 #reset all their interactions
                 
                 
                     
@@ -286,36 +368,16 @@ class Kawasaki:
         fig.set_size_inches(20,3)
         for i,key in zip(range(0,len(self.snapshots)),self.snapshots.keys()):
             #print(i,key)
-            im = axs[i].matshow(self.snapshots[key],vmin=0,vmax=10)
+            im = axs[i].matshow(self.snapshots[key],vmin=0,vmax=1)
             axs[i].axis('off')
             if titles == "on":
                 axs[i].set_title("t = " + str(key)) #+ " "+str(np.sum(self.snapshots[key])))
         if titles == "on":
             fig.colorbar(im, ax=axs.ravel().tolist(),orientation='horizontal',label="Average bond strength")
-    
-        
 
-        
-                    
-        
-            
-            
-            #pick a random site, which might as well be a protein
-all_results = dict()
-J_var_values = np.array([0,0.01,0.1,1,10])
-s_max_values = np.array([100,1000,10000,20000,50000,66666,100000])
-results = dict()
-for J_var in J_var_values:
-    results = dict()
-    print("doing",J_var)
-    for s_max in s_max_values:
-        
-        L = Kawasaki(dimension=31,density=1,seed=0,epsilon_0 = 0.1,J_var = J_var,J_max=10,s_max = s_max,beta = 1)
-        L.evolve_Kawasaki(100000,snapshots=20)
-        results[s_max] = L
-    all_results[J_var] = results
-    #plt.plot(L.snapshot_energies.keys(),[-i for i in L.snapshot_energies.values()])
-
+L = Kawasaki(dimension=10,density=1,seed=3,epsilon_0 = 0.2,J_var = 1,J_max=10,mode='rugged',beta = 1.0,nstates=5,R=3) 
+#print(L)
+L.evolve_Kawasaki(1000,10)
 
 #
-#L.plot_evolution()
+L.plot_evolution()
