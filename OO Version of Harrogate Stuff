@@ -1,21 +1,31 @@
 import numpy as np
 import matplotlib.pyplot as plt
 import math
+from scipy.linalg import block_diag
 
 class Kawasaki:
     def __init__(self,dimension=10,seed=0,density=0.5,epsilon_0 = 1.0,
-                 J_var = 0.0,J_max = 10.,mode='linear',
-                 s_max=100, beta = 1,delta=1,
-                R = 0.0,nstates=0):
+                 J_var = 0.0,J_max = 10.,mode='linear',config='droplet',
+                 s_max=100, beta = 1,delta=1,complexes = 4,
+                R = 0.0,nstates=0,make_complex=False,random=False):
         
         self.dimension = dimension
         self.density = density
         self.epsilon_0 = epsilon_0
         self.J_var = J_var
         self.mode = mode
+        
+        
             
         
         self.J_max = J_max
+        
+        self.covalent = 1E9
+        
+        
+        
+        
+        
         self.s_max = int(s_max)
         self.delta = 1.0/self.s_max
         #for reproducibility
@@ -27,35 +37,52 @@ class Kawasaki:
         self.swaps = 0
         self.spins = {0:0}
         self.iterations = 0
-        #make a square of root density and randomly add others
-        c = int(self.dimension/2)
-        side_length = np.sqrt(self.protein_number/np.pi ) 
-        protein_id = 1
+        #make a circle of root density and randomly add others
+        self.protein_types = dict()
         
-        for i in range(0,self.dimension):
-            for j in range(0,self.dimension):
-                if np.sqrt((i-c)**2 + (j-c)**2) <= side_length:
-                    if protein_id <= self.protein_number:
-                        self.lattice[i,j] = protein_id
-                        self.spins[protein_id] = 0
-                        
-                        protein_id += 1
-                        
-                    
-        #might not be exacltly right - remove/add until correct
-        
-        
-        proteins = np.sum(self.lattice>0)
-        #may have to add a few more in to get up to right number - add randomly
-        while proteins != self.protein_number:
-            proteins += 1
-            sites = np.where(self.lattice==0)
-            site = np.random.randint(len(sites[0]))
-            self.lattice[sites[0][site],sites[1][site]] = proteins
-            self.spins[proteins] = 0
-        #plt.matshow(self.lattice)
-        #we can make a dictionary of locations to save time
-        
+        if config == "droplet":
+            c = int(self.dimension/2)
+            side_length = np.sqrt(self.protein_number/np.pi ) 
+            protein_id = 1
+
+
+
+            self.ntypes = self.protein_number #4
+            
+           
+            protein_id_order = np.random.choice([i for i in range(1,self.ntypes+1)]*int(self.protein_number/self.ntypes),self.protein_number,replace=False)
+
+
+
+            for i in range(0,self.dimension):
+                for j in range(0,self.dimension):
+                    if np.sqrt((i-c)**2 + (j-c)**2) <= side_length:
+                        if protein_id <= self.protein_number:
+                            self.lattice[i,j] = protein_id
+                            self.spins[protein_id] = 0
+                            self.protein_types[protein_id] = protein_id_order[protein_id-1]
+                            protein_id += 1
+
+
+
+            #might not be exacltly right - remove/add until correct
+
+
+            proteins = np.sum(self.lattice>0)
+            #may have to add a few more in to get up to right number - add randomly
+            while proteins != self.protein_number:
+                proteins += 1
+                sites = np.where(self.lattice==0)
+                site = np.random.randint(len(sites[0]))
+                self.lattice[sites[0][site],sites[1][site]] = proteins
+                self.spins[proteins] = 0
+                self.protein_types[proteins] = protein_id_order[proteins-1]
+            #plt.matshow(self.lattice)
+            #we can make a dictionary of locations to save time
+        elif config == 'complex': #hard-coded for a 16 member complex
+            self.initialise_complexes(complexes=complexes)
+            self.protein_number = 16
+            self.max_site_J = 4*self.J_max
         self.locations = dict()
         
         
@@ -76,14 +103,48 @@ class Kawasaki:
                            np.array([-1,-1]),
                            np.array([-1,1]),
                            np.array([-1,0])]
-        self.J = np.zeros((self.protein_number+1,self.protein_number+1))
-        r = np.random.randn(self.protein_number+1,self.protein_number+1)
-        r = np.tril(r) + np.tril(r).T
-    
-        np.fill_diagonal(r,0)
-        r[0,:] = 0
-        r[:,0] = 0
-        self.J = (np.multiply(self.J_max,r!=0) + self.J_var*r)
+        
+        self.bond_neighbours = [np.array([1,0]),
+                           np.array([0,-1]),
+                           np.array([0,1]),
+                           np.array([-1,0])]
+        
+        
+        
+        
+        
+        if 0 == 1:
+            self.J = np.zeros((self.protein_number+1,self.protein_number+1))
+            self.max_site_J = 2*self.J_max
+            
+            for protein_id1 in range(1,self.protein_number+1):
+                for protein_id2 in range(1,self.protein_number+1):
+                    if self.protein_types[protein_id1] != self.protein_types[protein_id2]:
+                        if (self.protein_types[protein_id1] + self.protein_types[protein_id2] == 5):
+                            #this means that opposite corners hate each other
+                            self.J[protein_id1,protein_id2] = -self.J_max
+                        else:
+                            self.J[protein_id1,protein_id2] = self.J_max
+                    else:
+                        self.J[protein_id1,protein_id2] = -self.J_max
+                        
+            
+        elif random:
+            self.J = np.zeros((self.protein_number+1,self.protein_number+1))
+            self.max_site_J = 100*self.J_max #can never be reached
+            r = np.random.randn(self.protein_number+1,self.protein_number+1)
+            r = np.tril(r) + np.tril(r).T
+
+            np.fill_diagonal(r,0)
+            r[0,:] = 0
+            r[:,0] = 0
+            self.J = (np.multiply(self.J_max,r!=0) + self.J_var*r)
+        else:
+            
+            pass
+        
+        
+            
          
         
         #now record the position of each potential bond.
@@ -108,12 +169,119 @@ class Kawasaki:
             self.dE_function = self.get_dE_pair_linear
             self.E_function = self.get_energy_linear
             self.smax = s_max
+        elif mode == 'constant':
+            self.dE_function = self.get_dE_pair_constant
+            self.E_function = self.get_energy_constant
             
-            
+        self.backbone_contribution = self.covalent*(self.J > 0.1*self.covalent)
+        self.maximum_site_bond_strength = np.sum(self.J - self.covalent*(self.J>0.1*self.covalent)>0,axis=0)*self.J_max
+        
+        self.E0 = -np.sum(self.J[self.J > 0.1*self.covalent])
         
         self.snapshots = dict()
         self.snapshot_energies = dict()
+        self.snapshot_locations = dict()
         
+    def change_bond_properties(self,J_max=0,J_var=0):
+        L.J_var = J_var
+        L.J_max = J_max
+        self.J = np.zeros((self.protein_number+1,self.protein_number+1))
+        self.max_site_J = 100*self.J_max #can never be reached
+        r = np.random.randn(self.protein_number+1,self.protein_number+1)
+        r = np.tril(r) + np.tril(r).T
+
+        np.fill_diagonal(r,0)
+        r[0,:] = 0
+        r[:,0] = 0
+        self.J = (np.multiply(self.J_max,r!=0) + self.J_var*r)
+        
+    def initialise_complexes(self,complexes=4):
+        N = int(np.sqrt(complexes)) #these are put into a square
+        
+        structure = np.zeros((4,4),dtype=int)
+        structure[2,1] = 11
+        structure[2,2] = 12
+        structure[3,2] = 13
+        structure[3,3] = 14
+
+        structure[1,0] = 21
+        structure[2,0] = 22
+        structure[3,0] = 23
+        structure[3,1] = 24
+
+        structure[0,2] = 31
+        structure[0,3] = 32
+        structure[1,3] = 33
+        structure[2,3] = 34
+
+        structure[0,0] = 41
+        structure[0,1] = 42
+        structure[1,1] = 43
+        structure[1,2] = 44
+
+
+        J_complex = np.zeros((17,17))
+
+        id_to_number = {11:1,12:2,13:3,14:4,
+                       21:5,22:6,23:7,24:8,
+                       31:9,32:10,33:11,34:12,
+                       41:13,42:14,43:15,44:16}
+
+        
+
+        for site_id1 in list(id_to_number.keys()):
+            for site_id2 in list(id_to_number.keys()):
+                if abs(site_id2 - site_id1) == 1: #backbone
+                    J_complex[id_to_number[site_id1],id_to_number[site_id2]] = self.covalent
+                    J_complex[id_to_number[site_id2],id_to_number[site_id1]] = self.covalent
+                else:
+                    c1 = np.where(structure == site_id1)
+                    c2 = np.where(structure == site_id2)
+
+                    if (c1[0] - c2[0])**2 + (c1[1] - c2[1])**2 == 1: #
+
+                        J_complex[id_to_number[site_id1],id_to_number[site_id2]] = self.J_max
+                        J_complex[id_to_number[site_id2],id_to_number[site_id1]] = self.J_max
+                    else:
+                        J_complex[id_to_number[site_id1],id_to_number[site_id2]] = -self.J_max
+                        J_complex[id_to_number[site_id2],id_to_number[site_id1]] = -self.J_max
+        
+        
+        x,y = np.where(structure!=0)
+        
+        for i,j in zip(x,y):
+            counter = 0
+            for nx in range(0,N):
+                for ny in range(0,N):
+                    
+                    self.lattice[i+nx*4,j+ny*4] = id_to_number[structure[i,j]] + counter
+                    counter += 16
+                #counter += 16
+        #print(self.lattice)  
+        
+        self.protein_types = dict()
+        for n in range(0,N**2):
+            for k,v in id_to_number.items():
+                self.protein_types[v + n*16] = k
+                self.spins[v + n*16] = 0
+        
+        #print("HERE",self.protein_types)
+        #print("HERE",self.spins)
+            #self.protein_types = dict(zip(id_to_number.values(),id_to_number.keys()))
+        #for p in list(id_to_number.values()):
+         #   self.spins[p] = 0
+        #print("JC", np.shape(J_complex))
+        to_add = (N**2-1)*[J_complex[1:,1:]]
+        self.J = block_diag(J_complex,*to_add)
+        
+        self.backbone_contribution = self.covalent*(L.J > 0.1*self.covalent) #which will subtract in energy calculations
+        
+        
+        self.maximum_site_bond_strength = np.sum(L.J - L.covalent*(L.J>0.1*L.covalent)>0,axis=0)*self.J_max
+        
+        #print("J", self.J)
+        
+            
         
         
                     
@@ -168,14 +336,32 @@ class Kawasaki:
         if id_i == None:
             return(0)
         si = self.iterations - self.spins[id_i]
-        j_coords = np.array([np.array(ci) + n for n in self.neighbours])%self.dimension
+        j_coords = np.array([np.array(ci) + n for n in self.bond_neighbours])%self.dimension
         j_ids = [self.lattice[cj[0],cj[1]] for cj in j_coords]
         sj = [self.iterations - self.spins[id_j] if id_j != 0 else 0 for id_j in j_ids]
         
-        J_ij = [self.J[id_i,id_j]  for id_j in j_ids]
-        E = -np.dot(J_ij,np.minimum(np.minimum(si,sj),self.s_max)*self.delta*(1. - self.epsilon_0) + self.epsilon_0)
+        J_ij = [self.J[id_i,id_j] - self.backbone_contribution[id_i,id_j]  for id_j in j_ids]
         
-        return(E)
+        E = -np.minimum(np.multiply(J_ij,np.minimum(np.minimum(si,sj),self.s_max)*self.delta*(1. - self.epsilon_0) + self.epsilon_0),self.maximum_site_bond_strength[id_i]) - self.backbone_contribution[id_i][j_ids]
+        
+        #the energy it can have is capped:
+            #remove the backbone contribution
+            #the resulting bond can have a strength 
+        
+        
+        return(np.sum(E))
+    
+    def get_energy_constant(self,ci):
+        id_i = self.lattice[ci[0],ci[1]]
+        if id_i == None:
+            return(0)
+        
+        j_coords = np.array([np.array(ci) + n for n in self.bond_neighbours])%self.dimension
+        j_ids = [self.lattice[cj[0],cj[1]] for cj in j_coords]
+        
+        J_ij = [self.J[id_i,id_j] for id_j in j_ids]
+               
+        return(np.sum(J_ij))
         
                                     
     def get_energy_rugged(self,ci):
@@ -183,7 +369,7 @@ class Kawasaki:
         if id_i == None:
             return(0)
         
-        j_coords = np.array([np.array(ci) + n for n in self.neighbours])%self.dimension
+        j_coords = np.array([np.array(ci) + n for n in self.bond_neighbours])%self.dimension
         j_ids = [self.lattice[cj[0],cj[1]] for cj in j_coords]
         
         E = 0
@@ -242,18 +428,47 @@ class Kawasaki:
             self.lattice[cj[0],cj[1]] = self.lattice[ci[0],ci[1]]
             self.lattice[ci[0],ci[1]] = temp
             
+    def get_dE_pair_constant(self,ci,cj):
+        id_i = self.lattice[ci[0],ci[1]]
+        id_j = self.lattice[cj[0],cj[1]]
+        if id_j != 0:
+            return(0) #since constant can be no change in energy
+        else:
+            #since j is 0, will lose i_ai and gain a_aj
+            
+            ai_coords = np.array([np.array(ci) + n for n in self.bond_neighbours])%self.dimension #coordinates adjacent to i
+
+            ai_ids = [self.lattice[ai[0],ai[1]] for ai in ai_coords]
+        
+            J_i_ai = [self.J[id_i,id_ai]  for id_ai in ai_ids]
+
+            aj_coords = np.array([np.array(cj) + n for n in self.bond_neighbours])%self.dimension #coordinates adjacent to i
+
+            aj_ids = [self.lattice[aj[0],aj[1]] for aj in aj_coords]
+        
+
+            J_i_aj = [self.J[id_i,id_aj]  for id_aj in set(aj_ids).union({id_j}).difference({id_i})]
+
+            E_i_before = -np.sum(J_i_ai)
+            E_i_after = -np.sum(J_i_aj)
+            return(E_i_after - E_i_before)
+
+       
+            
+    
+            
     def get_dE_pair_linear(self,ci,cj):
         id_i = self.lattice[ci[0],ci[1]]
         id_j = self.lattice[cj[0],cj[1]]
         si_before = self.iterations - self.spins[id_i]
-        ai_coords = np.array([np.array(ci) + n for n in self.neighbours])%self.dimension #coordinates adjacent to i
+        ai_coords = np.array([np.array(ci) + n for n in self.bond_neighbours])%self.dimension #coordinates adjacent to i
 
         ai_ids = [self.lattice[ai[0],ai[1]] for ai in ai_coords]
         sai = [(self.iterations - self.spins[ai_id]) if ai_id != 0 else 0 for ai_id in ai_ids]
 
         J_i_ai = [self.J[id_i,id_ai]  for id_ai in ai_ids]
 
-        aj_coords = np.array([np.array(cj) + n for n in self.neighbours])%self.dimension #coordinates adjacent to i
+        aj_coords = np.array([np.array(cj) + n for n in self.bond_neighbours])%self.dimension #coordinates adjacent to i
 
         aj_ids = [self.lattice[aj[0],aj[1]] for aj in aj_coords]
         saj = [(self.iterations - self.spins[aj_id]) if aj_id != 0 else 0 for aj_id in aj_ids]
@@ -284,23 +499,25 @@ class Kawasaki:
         dE = (E_i_after + E_j_after - bond_between_after)-(E_i_before + E_j_before - bond_between_before)
         return dE
     
+    
+    
     def get_dE_pair_rugged(self,ci,cj):
         #this calculates the change in energy if this pair is swapped.
         id_i = self.lattice[ci[0],ci[1]]
         id_j = self.lattice[cj[0],cj[1]]
         
-        E_i_before = self.get_energy(ci)
-        E_j_before = self.get_energy(cj)
+        E_i_before = self.get_energy_rugged(ci)
+        E_j_before = self.get_energy_rugged(cj)
         
         si_before = self.iterations - self.spins[id_i]
-        ai_coords = np.array([np.array(ci) + n for n in self.neighbours])%self.dimension #coordinates adjacent to i
+        ai_coords = np.array([np.array(ci) + n for n in self.bond_neighbours])%self.dimension #coordinates adjacent to i
         
         ai_ids = [self.lattice[ai[0],ai[1]] for ai in ai_coords]
         sai = [(self.iterations - self.spins[ai_id]) if ai_id != 0 else 0 for ai_id in ai_ids]
         
         J_i_ai = [self.J[id_i,id_ai]  for id_ai in ai_ids]
         
-        aj_coords = np.array([np.array(cj) + n for n in self.neighbours])%self.dimension #coordinates adjacent to i
+        aj_coords = np.array([np.array(cj) + n for n in self.bond_neighbours])%self.dimension #coordinates adjacent to i
         
         aj_ids = [self.lattice[aj[0],aj[1]] for aj in aj_coords]
         saj = [(self.iterations - self.spins[aj_id]) if aj_id != 0 else 0 for aj_id in aj_ids]
@@ -347,14 +564,19 @@ class Kawasaki:
                 
                 
                 self.total_energy[i,j] = self.E_function((i,j))
-         
-        self.total_energy /= (-8*self.J_max)
+       # print("before", self.total_energy)
+        
+        #self.total_energy += self.E0 #to remove backbone energy
+        #self.total_energy = self.total_energy - self.E0
+       # print("after", self.total_energy)
+        #self.total_energy /= (-self.J_max)
 
         
     def evolve_Kawasaki(self,steps,snapshots=10):
         self.get_total_energy()
         self.snapshots[self.iterations] = np.copy(self.total_energy)
-        self.snapshot_energies[self.iterations] = np.sum(self.total_energy)/self.protein_number
+        self.snapshot_energies[self.iterations] = np.sum(self.total_energy) - self.E0 #/self.protein_number
+        self.snapshot_locations[self.iterations] = self.locations
         
         if snapshots > 0:
             every = int(steps/snapshots)
@@ -367,7 +589,8 @@ class Kawasaki:
                 #print("Doing snapshot---------------", iteration)
                 self.get_total_energy()
                 self.snapshots[self.iterations] = np.copy(self.total_energy)
-                self.snapshot_energies[self.iterations] = np.sum(self.total_energy)/self.protein_number
+                self.snapshot_energies[self.iterations] = np.sum(self.total_energy) - self.E0 #/self.protein_number
+                self.snapshot_locations[self.iterations] = self.locations.copy()
             #pick a random id from locations
             
            
@@ -387,18 +610,18 @@ class Kawasaki:
             
             dE = self.dE_function(coord_i,coord_j)
             
+            if dE < 0.1*self.covalent: #to prevent breaking backbone
             
-            
-            if np.random.rand() <  np.exp(min(-self.beta*(dE),0)):
-                
-                self.swaps += 1
-                
-                self.swap(coord_i,coord_j)
-                self.spins[id_i] = self.iterations
-                self.spins[id_j] = self.iterations
-                if self.mode == 'rugged':
-                    self.bond_position[id_i,:] = 0 #reset all their interactions
-                    self.bond_position[id_j,:] = 0 #reset all their interactions
+                if np.random.rand() <  np.exp(min(-self.beta*(dE),0)):
+
+                    self.swaps += 1
+
+                    self.swap(coord_i,coord_j)
+                    self.spins[id_i] = self.iterations
+                    self.spins[id_j] = self.iterations
+                    if self.mode == 'rugged':
+                        self.bond_position[id_i,:] = 0 #reset all their interactions
+                        self.bond_position[id_j,:] = 0 #reset all their interactions
                 
                 
                     
@@ -420,22 +643,43 @@ class Kawasaki:
                      orientation='horizontal')
                     
         plt.title("J_max = " + str(self.J_max))
-    def plot_evolution(self,titles="on"):
+    def plot_evolution(self,titles="on",types=False):
         fig, axs = plt.subplots(1,len(self.snapshots))
+        plt.rcParams.update({'font.size': 12})
         fig.set_size_inches(20,3)
+        c = plt.get_cmap('tab20')
         for i,key in zip(range(0,len(self.snapshots)),self.snapshots.keys()):
             #print(i,key)
-            im = axs[i].matshow(self.snapshots[key],vmin=0,vmax=1)
+            if types:
+                
+                lattice_types = np.zeros_like(self.lattice,dtype=int)
+                for protein_id,coord in self.snapshot_locations[key].items():
+                    lattice_types[coord[0],coord[1]] = np.floor(self.protein_types[protein_id]/10)
+                lattice_types[lattice_types>=10] += 1
+                lattice_types += (lattice_types==0)*10 #to recolour solvent (need to be fewer than 10 species!)
+                im = axs[i].matshow(lattice_types,cmap=c,vmin=1,vmax=10) #,vmin=0,vmax=10)
+            else:
+                vals = np.unique(np.concatenate([a.flatten() for a in self.snapshots.values()]))
+                vmin=np.min(vals)-1
+                vmax=np.max(vals)+1
+                #print(vmin,vmax)
+                im = axs[i].matshow(self.snapshots[key],vmin=vmin,vmax=vmax)
             axs[i].axis('off')
             if titles == "on":
                 axs[i].set_title("t = " + str(key)) #+ " "+str(np.sum(self.snapshots[key])))
         if titles == "on":
-            fig.colorbar(im, ax=axs.ravel().tolist(),orientation='horizontal',label="Average bond strength")
+            if not types:
+                fig.colorbar(im, ax=axs.ravel().tolist(),orientation='horizontal',label="Average bond strength")
 
-L = Kawasaki(dimension=31,density=0.5,seed=3,epsilon_0 = 0,J_var = 0,J_max=10,mode='linear',
-             beta = 0.0,nstates=5,R=5,s_max = 500) 
+                
+
+L = Kawasaki(dimension=51,density=0.5,seed=3,epsilon_0 = 1.0,J_var = 0,J_max=1.0,mode='constant',config='droplet',
+             beta = 0,nstates=5,R=1,complexes = 4,s_max = 30000,random=True) 
 #print(L)
-L.evolve_Kawasaki(10000,5)
-
-#
-L.plot_evolution()
+L.beta = 0.0
+L.evolve_Kawasaki(100000,5)
+plt.imshow(L.lattice != 0)
+#L.beta = 1.0
+#L.evolve_Kawasaki(100000,5)
+#L.plot_evolution(types=True)
+#L.plot_evolution(types=False)
