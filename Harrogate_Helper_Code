@@ -1,0 +1,174 @@
+dimension = 31
+beta_values = np.linspace(10,0,21)
+density_values = np.linspace(1.0,0.1,21) #np.linspace(0.1,1.0,10)
+print(beta_values,density_values)
+results = np.zeros((len(beta_values),len(density_values)))
+final_snaps = dict()
+
+for j in range(0,len(density_values)):
+    density = density_values[j]
+    L = Kawasaki(dimension=dimension,density=density,seed=3,epsilon_0 = 1.0,J_var = 1.0,J_max=0.0,mode='constant',config='droplet',
+                     beta = 1,nstates=5,R=1,complexes = 4,s_max = 30000,random=True)
+    
+    
+    initial_eq = 10000
+    L.evolve_Kawasaki(initial_eq,0)
+    #L.evolve_Kawasaki(initial_eq,0) #equilibrates
+    for i in range(0,len(beta_values)):
+        J_var = beta_values[i]
+        
+        L.change_bond_properties(J_max=0,J_var=J_var)
+         
+        
+        
+        
+        #beta = beta_values[i]
+        #L.beta = beta_values[i]
+        
+        #L.beta = beta_values[i]
+        
+        
+        
+        #snaps = 1
+        max_time = 10000
+        L.evolve_Kawasaki(max_time,0)
+        
+        final_snaps[(i,j)] = np.copy(L.lattice)
+        
+        
+        
+        
+     #   for time,lattice in L.snapshots.items():
+      #      if time >= max_time/2:
+       #         matrices.append(lattice != 0)
+            
+        
+        #where key is greater than 5000 perform average
+
+        #print(sdjnks)
+        #d = 31
+        #for length in range(1,50,5):
+
+        #matrices = [L.lattice != 0]
+
+        norm_g,inhom = get_inhom([final_snaps[(i,j)]])
+        results[i,j] = inhom
+        
+        print("values",L.J_var,L.density,inhom)
+        #print(beta,density,inhom)
+    #plt.scatter(beta,inhom)
+
+
+
+
+
+
+
+
+
+
+
+
+plt.rcParams.update({'font.size': 5})
+
+print(final_snaps.keys())
+fig,axs = plt.subplots(len(beta_values),len(density_values),sharex=True,sharey=True)
+fig.set_size_inches(10,10)
+for j in range(0,len(density_values)):
+    for i in range(0,len(beta_values)):
+       # print(i,j)
+        #print(np.sum(final_snaps[(i,j)]))
+        #axs[i,j].set_title('$ \\beta $: ' + str('{0:.2f}'.format(beta_values[i])) + ', $ \\rho $: ' + str('{0:.2f}'.format(density_values[j]) ))
+        axs[len(beta_values)-1-i,len(density_values)-1-j].imshow(final_snaps[(i,j)]!=0,vmin=0,vmax=1)
+        axs[i,j].set_axis_off()
+#print(final_snaps)
+        #axs[i,j].set_colorbar()
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+#print(results[-1])
+normalised_results = np.divide(results,results[-1]) - 1
+#print(normalised_results)
+plt.rcParams.update({'font.size': 30})
+plt.imshow(normalised_results[::-1,::-1])
+plt.colorbar(label='$I_{(\\rho,J)}$')
+plt.contour(normalised_results[::-1,::-1]>0.5,alpha=1,linewidths=3,colors='red')
+#plt.gca().set_position(pos='bottom')
+plt.gcf().set_size_inches(10,10)
+plt.xticks([i for i in range(0,len(density_values),20)],labels=['{0:.1f}'.format(b) for b in density_values[::-20]])
+plt.yticks([i for i in range(len(beta_values),0,-4)],labels=['{0:.1f}'.format(b) for b in beta_values[0::4]])
+plt.ylim(len(beta_values),0)
+plt.xlabel("$\\rho$")
+plt.ylabel("$\sigma_{J}$")
+for i in range(0,len(beta_values)):
+    for j in range(0,len(density_values)):
+        pass
+        #plt.text(j,i,'{0:.2f}'.format(normalised_results[(i,j)]),size=10,va='center',ha='center',c='white')
+
+
+
+
+
+
+
+
+
+
+
+
+d = 51
+#M1 = np.random.randint(2,size=(d,d))
+#M2 = np.random.randint(100,size=(d,d)) == 1
+matrices = [np.random.randint(100,size=(d,d)) == 1 for i in range(0,10)]
+
+#M = 0*np.identity(d,dtype=int)
+#M[0:5,0:5] = 1
+#print(M)
+
+def get_inhom(matrices):
+    d1,d2 = np.shape(matrices[0])
+    d = d1
+    g = np.zeros(d1*d2)
+    number = np.zeros(d1*d2,dtype=int)
+    
+    for M in matrices:
+        x,y = (np.where(M != 0))
+        x_all,y_all = np.where(M!=2)
+        for i in range(0,len(x)): #for each site that is occupied
+            for j in range(0,len(x_all)): #for every site around it
+                x1 = x[i]
+                y1 = y[i]
+                x2 = x_all[j]
+                y2 = y_all[j]
+                x_dist = min([(x1 - x2)**2,(x1 - x2 - d)**2,(x1 - x2 + d)**2])
+                y_dist = min([(y1 - y2)**2,(y1 - y2 - d)**2,(y1 - y2 + d)**2])
+                dsq = x_dist + y_dist
+                if dsq > 0:
+                #print(dsq)
+                    g[dsq] += M[x_all[j],y_all[j]]
+                    number[dsq] += 1
+ 
+    g_dict = dict()
+    n_dict = dict()
+    for i in range(0,len(g)):
+        if number[i] > 0:
+            g_dict[i] = g[i]
+            n_dict[i] = number[i]
+    norm_g = dict(zip(g_dict.keys(),[(g/n)/(np.sum(M)/d**2) for g,n in zip(g_dict.values(),n_dict.values())]))
+    inhom = sum([abs(n-1) for n in norm_g.values()])
+    return(norm_g,inhom)
+
+norm_g,inhom = get_inhom(matrices)
+ 
