@@ -1,0 +1,102 @@
+#now re-create this with MC
+
+def V(x,f,J0):
+    return(0.5*f*x**2 + J0)
+
+def get_next(t,x0,D,f,beta):
+
+    
+    delta = np.sqrt(2/(beta*f))
+    
+    if D == 0:
+        tau = 0
+    else:
+        tau_tilde = 2*delta/D
+        tau = t/tau_tilde
+    
+    s = np.exp(-2*tau)
+    #print("s",t,s,tau)
+    
+    
+    gamma0 = x0/(np.sqrt(2)*delta)
+    mu = gamma0*s
+    std = np.sqrt(0.25*(1 - s**2))
+    #print(mu,std,tau)
+    gamma = mu + std*np.random.randn()
+    x = (np.sqrt(2)*delta)*gamma
+    return(x)
+    
+state = 0
+
+
+E = 0
+dimensions = 1
+ #x_unbonded
+ud = 10
+J0 = -1
+f = 1
+D = 0.01
+beta= 1
+last = 0
+x_unbonded = np.sqrt(-2*J0/f)
+x0 = np.array([np.nan]*dimensions)
+x = x0 #x_unbonded
+results_c = []
+sigma = 0.01 #*np.sqrt(1./beta*f)
+results_x = dict()
+for i in range(0,100000):
+   # if np.random.rand() < 0.999: #it doesn't matter how infrequently you sample
+     #   continue
+   # print(i,state,x)
+    if state == 0:
+        
+        if np.random.rand() < 1./ud: #then binding event occurs
+            
+            new_x = sigma*np.random.randn(dimensions)+x_unbonded #this is the new state it could accept
+            #print("new",new_x,x_unbonded)
+            new_E = V(new_x,f,J0)
+            
+            g_u_b =  1 #NormalDist(mu=0, sigma=np.sqrt(1./beta*f)).pdf(x_unbonded)
+            g_b_u =  np.array([NormalDist(mu=x_unbonded, sigma=sigma).pdf(nx) for nx in new_x])
+          #  print(i,g_u_b,g_b_u)
+            #check how favourable the bond is
+            p_accept = np.sum(np.multiply(np.exp(-beta*new_E),np.divide(g_u_b,g_b_u)))
+          #  print(i,p_accept) #np.divide(g_u_b,g_b_u),np.exp(-beta*new_E))
+            if np.random.rand() < p_accept: #transitions to new bound state given by Boltzmann
+                state = 1
+
+                x = new_x
+
+                E = new_E
+                last = i
+            
+    elif state == 1:
+        #first evolve.
+        x = np.array([get_next(i-last,xx,D,f,beta) for xx in x])
+        #print(i-last)
+        last = i
+        
+        #x = np.sqrt(1./beta*f)*np.random.randn()
+       
+        E = V(x,f,J0)
+        
+        g_u_b =  1 #NormalDist(mu=0, sigma=np.sqrt(1./beta*f)).pdf(x_unbonded)
+      #  g_b_u =  NormalDist(mu=x_unbonded, sigma=sigma).pdf(x)
+        g_b_u =  np.array([NormalDist(mu=x_unbonded, sigma=sigma).pdf(xx) for xx in x])
+      #  print(np.exp(+beta*E),g_b_u,g_u_b,g_u_b/g_b_u)
+        #check if un-binds. Since in a state given by Boltzmann, equal change of un-binding
+        p_accept = np.sum(np.multiply(np.exp(+beta*E),np.divide(g_b_u,g_u_b)))
+        if np.random.rand() < p_accept: #*g_b_u/g_u_b:
+            state = 0
+            E = 0
+            x = x0 #x_unbonded
+            
+    if type(E) is not int:
+        results_c.append(np.sum(E)/len(E))
+    else:
+        results_c.append(E)
+    results_x[i] = x
+    #print(x)
+#results2_counts = [(-e,results2.count(e)/len(results2)) for e in set(state_energies)]
+results_c = np.array(results_c)      
+#print(results_x)
