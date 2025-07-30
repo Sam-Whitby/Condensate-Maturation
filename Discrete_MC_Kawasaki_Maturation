@@ -2,23 +2,25 @@
 class Kawasaki_Discrete:
    
     
-    def __init__(self,L=5,seed=0,max_x = 0,D=1):
+    def __init__(self,beta=1,particles=2,L=5,seed=0,max_x = 0,D=1):
         self.directions = [-1,1]
         np.random.seed(seed)
         self.max_x = max_x
-        self.beta= 1
+        self.beta= beta
         self.L = L
         self.counter = 0
         self.lattice = np.zeros(self.L,dtype=int)
-        self.lattice[0] = 1
-        self.lattice[2] = 2
+        self.particles = particles
+        for p in range(0,particles):
+            self.lattice[p] = p+1
+        
         
         self.unique = len(set(self.lattice).union({0}))
         self.position = np.zeros((self.unique,self.unique),dtype=int)
         self.position[1,2] = 0
         self.position[2,1] = 0
         self.results = dict()
-        self.difs = dict()
+        self.pair_count = dict()
         self.D = D
         self.neighbours = np.array([-1,1])
         
@@ -26,16 +28,11 @@ class Kawasaki_Discrete:
     
     def total_energy(self):
         E = 0
+        pairs = self.get_pairs()
+        for pair in pairs:
+            p1,p2 = pair
         
-        site1,site2 = np.where(self.lattice!=0)[0]
-        if (site1+1)%self.L == site2 or  (site2+1)%self.L == site1:
-            dif = 1
-        else:
-            dif = 0
-            return(0)
-        p1 = self.lattice[site1]
-        p2 = self.lattice[site2]
-        E = -self.position[p1,p2]*np.sign(p1)*np.sign(p2)
+            E += -self.position[p1,p2]*np.sign(p1)*np.sign(p2)
         return(E)
         #gets here, means we just need the 
         
@@ -58,8 +55,9 @@ class Kawasaki_Discrete:
     
     def update_position(self):
         pairs = self.get_pairs()
-        self.difs[self.counter] = len(pairs)
-        if len(pairs) == 0:
+        self.pairs = len(pairs)
+        #self.difs[self.counter] = len(pairs)
+        if self.pairs == 0:
             return()
         
         
@@ -75,42 +73,56 @@ class Kawasaki_Discrete:
             new = min(max(old + dx,0),self.max_x)
             self.position[p1,p2] = new
             self.position[p2,p1] = new
-            new_E = self.total_energy()
-            if np.random.rand() < np.exp(-self.beta*(new_E - self.E)):
-                self.E = new_E
-            else:
-                self.position[p1,p2] = old
-                self.position[p2,p1] = old
+        new_E = self.total_energy()
+        if np.random.rand() < np.exp(-self.beta*(new_E - self.E)):
+            self.E = new_E
+        else:
+            self.position[p1,p2] = old
+            self.position[p2,p1] = old
         return()
         
         
         
     def Kawasaki(self):
-        if self.E != 0:
-            return()
+        
         #get old stuff copied
-        old = np.copy(self.lattice)
-        old_positions = np.copy(self.position)
+        
         
         
         
         direction = np.random.choice(self.directions)
         site1 = np.random.choice(np.where(self.lattice != 0)[0])
         site2 = (site1 + direction)%self.L
+        
+        #can't break any bonds
+        
         #self.E = self.total_energy()
         
+    
         
         
-        x_new = np.random.choice([0,1],p=[1,0],size=3)
         
         p1b = self.lattice[(site1-direction)%self.L]
         p1 = self.lattice[site1]
         p2 = self.lattice[site2]
         p2f = self.lattice[(site2+direction)%self.L]
         
+        bond1 = self.position[p1,p2]*np.sign(p1)*np.sign(p2)
+        bond2 = self.position[p1,p1b]*np.sign(p1)*np.sign(p1b)
+        bond3 = self.position[p2,p2f]*np.sign(p2)*np.sign(p2f)
         
+        
+        
+        if bond1+bond2+bond3 != 0:
+            return()
+        old = np.copy(self.lattice)
+        old_positions = np.copy(self.position)
+        
+        
+        
+        x_new = np.random.choice([0,1],p=[1,0],size=3)
         #there are three bonds which are broken in 1d Kawasaki
-        self.position *= 0
+        #self.position *= 0
         self.position[p1,p2] = x_new[0]*np.sign(p1)*np.sign(p2)
         self.position[p2,p1] = self.position[p1,p2]
 
@@ -140,35 +152,38 @@ class Kawasaki_Discrete:
         self.position = np.copy(old_positions)
      
     
-    def iterate(self,iterations=0):
+    def iterate(self,iterations=0,every=1):
         
         #print("HERE",self.lattice)
         #print("BEFORE", self.lattice)
         self.E = self.total_energy()
-        self.difs[self.counter] = 0
+        self.pair_count[self.counter] = 0
         self.results[self.counter] = self.E
         for iteration in range(0,iterations):
             
             self.Kawasaki()
             #
             self.update_position()
-            self.results[self.counter] = self.E
+            if iteration%every==0:
+                self.results[self.counter] = self.E
+                self.pair_count[self.counter] = self.pairs
             self.counter += 1
             
             
 
 import numpy as np
 import matplotlib.pyplot as plt
-L = 10
-a = Kawasaki_Discrete(L=L,seed = 2,max_x = 5,D=1)
-a.iterate(10000)
+L = 20
+a = Kawasaki_Discrete(L=L,beta=1,particles=2,seed = 2,max_x = 5,D=1)
+a.iterate(iterations=100000,every=100)
+
 #print(a.lattice)
 #print(a.E_values)
 #print(a.difs)
 plt.plot(a.results.keys(),a.results.values())
-plt.scatter(a.results.keys(),a.results.values(),marker='.',c = ['r' if d==1 else 'b' for d in a.difs.values()])
+plt.scatter(a.results.keys(),a.results.values(),marker='.',c = ['r' if d==1 else 'g' if d == a.particles else 'b' for d in a.pair_count.values()])
 #print(a.position)
-#print(a.lattice)
+print(a.lattice)
 #print(a.results)
 
 
