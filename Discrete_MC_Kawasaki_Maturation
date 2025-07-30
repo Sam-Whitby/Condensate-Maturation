@@ -20,6 +20,7 @@ class Kawasaki_Discrete:
         self.results = dict()
         self.difs = dict()
         self.D = D
+        self.neighbours = np.array([-1,1])
         
     
     
@@ -41,32 +42,45 @@ class Kawasaki_Discrete:
         
         return(-E)
     
+    def get_pairs(self):
+        pairs = set()
+        for i in range(0,len(self.lattice)):
+            site = self.lattice[i]
+            if site == 0: #no need to consider solvent
+                continue
+            for n in self.neighbours:
+                neighbour = self.lattice[(i+n)%self.L]
+                if neighbour != 0:
+                
+                    pairs.add(tuple(sorted([site,neighbour])))
+        
+        return(pairs)
+    
     def update_position(self):
-        
-        #only update position between 1 and 2 IFF they are next to each other
-        site1,site2 = np.where(self.lattice!=0)[0]
-        if (site1+1)%self.L == site2 or  (site2+1)%self.L == site1:
-            dif = 1
-        else:
-            dif = 0
-        self.difs[self.counter] = dif
-        
-        if np.random.rand() > self.D:
+        pairs = self.get_pairs()
+        self.difs[self.counter] = len(pairs)
+        if len(pairs) == 0:
             return()
         
-        if dif == 1:
-            old = np.copy(self.position[1,2])
-            new = np.random.randint(self.max_x+1)
+        
+        #calculate if diffuses or not
+        if np.random.rand() > self.D:
+            return()
+        for pair in pairs:
+            p1,p2 = pair
+        
+            old = np.copy(self.position[p1,p2])
+           # new = np.random.randint(self.max_x+1)
             dx = np.random.choice([-1,1])
             new = min(max(old + dx,0),self.max_x)
-            self.position[1,2] = new
-            self.position[2,1] = new
+            self.position[p1,p2] = new
+            self.position[p2,p1] = new
             new_E = self.total_energy()
             if np.random.rand() < np.exp(-self.beta*(new_E - self.E)):
                 self.E = new_E
             else:
-                self.position[1,2] = old
-                self.position[2,1] = old
+                self.position[p1,p2] = old
+                self.position[p2,p1] = old
         return()
         
         
@@ -145,18 +159,17 @@ class Kawasaki_Discrete:
 
 import numpy as np
 import matplotlib.pyplot as plt
-L = 100
-a = Kawasaki_Discrete(L=L,seed = 2,max_x = 5,D=0.1)
-a.iterate(5000)
+L = 10
+a = Kawasaki_Discrete(L=L,seed = 2,max_x = 5,D=1)
+a.iterate(10000)
 #print(a.lattice)
 #print(a.E_values)
-
+#print(a.difs)
 plt.plot(a.results.keys(),a.results.values())
 plt.scatter(a.results.keys(),a.results.values(),marker='.',c = ['r' if d==1 else 'b' for d in a.difs.values()])
 #print(a.position)
 #print(a.lattice)
 #print(a.results)
-
 
 
 energies = list(set(a.results.values()))
