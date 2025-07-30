@@ -1,0 +1,192 @@
+
+class Kawasaki_Discrete:
+   
+    
+    def __init__(self,L=5,seed=0,max_x = 0):
+        np.random.seed(seed)
+        self.max_x = max_x
+        self.beta= 1
+        self.L = L
+        self.counter = 0
+        self.lattice = np.zeros(self.L,dtype=int)
+        self.lattice[0] = 1
+        self.lattice[1] = 2
+        
+        self.unique = len(set(self.lattice).union({0}))
+        self.position = np.zeros((self.unique,self.unique),dtype=int)
+        self.position[1,2] = 0
+        self.position[2,1] = 0
+        self.results = dict()
+        
+    
+    
+    def total_energy(self):
+        E = 0
+        for x in range(0,self.L):
+            #print(E,"HERE",x,self.lattice[x],self.lattice[(x+1)%self.L],self.position[self.lattice[x],self.lattice[(x+1)%self.L]])
+            site1 = self.lattice[x]
+            site2 = self.lattice[(x-1)%self.L]
+            #energy only contributed if non-zero
+            E += self.position[site1,site2]*np.sign(site1)*np.sign(site2)
+        return(-E)
+    
+    def iterate(self,iterations=0):
+        directions = [-1,1]
+        #print("HERE",self.lattice)
+        #print("BEFORE", self.lattice)
+        E = self.total_energy()
+        self.results[self.counter] = E
+        for iteration in range(0,iterations):
+           
+            delta = np.random.choice([-1,1],size=(self.unique,self.unique))          
+            delta = np.tril(delta) + np.tril(delta).T
+            np.fill_diagonal(delta,0)
+            
+            E_before = self.total_energy()
+            
+            old_position = np.copy(self.position)
+            
+            
+            
+            
+            #delta *= 0
+            
+            
+            
+            self.position = np.maximum(np.minimum(self.position+delta,self.max_x),0)
+            
+            E_after = self.total_energy()
+            
+            #print("HERE", iteration,E_before,E_after,np.exp(-self.beta*(E_after - E_before)))
+            
+            if np.random.rand() < np.exp(-self.beta*(E_after - E_before)):
+                E_before = E_after
+                #pass
+                
+            else:
+                
+                #reset
+                
+                self.position = np.copy(old_position) #np.maximum(np.minimum(self.position-delta,self.max_x),0)
+                
+                #E_before = E_before
+            
+             
+            #continue
+            old = np.copy(self.lattice)
+            old_positions = np.copy(self.position)
+            #self.position = self.position*0 + 1 #all 1
+            E_before = self.total_energy()
+            
+            direction = np.random.choice(directions)
+            site1 = np.random.randint(self.L)
+            #site1 = np.random.choice(np.where(self.lattice != 0)[0])
+            
+            site2 = (site1 + direction)%self.L
+            
+            temp = np.copy(self.lattice[site1])
+            self.lattice[site1] = self.lattice[site2]
+            self.lattice[site2] = temp
+            
+            
+            
+            #when selecting new bond - 2 times more likely to be 0 than 1
+  
+            #how does the position change?
+            x_new = np.random.randint(self.max_x+1,size=3) #
+            
+            p1b = self.lattice[(site1-direction)%self.L]
+            p1 = self.lattice[site1]
+            p2 = self.lattice[site2]
+            p2f = self.lattice[(site2+direction)%self.L]
+            #print(x_new)
+           # self.position *= 0
+            self.position[p1,p2] = x_new[0]*np.sign(p1)*np.sign(p2)
+            self.position[p2,p1] = self.position[p1,p2]
+
+            self.position[p1,p1b] = x_new[1]*np.sign(p1)*np.sign(p1b)
+            self.position[p1b,p1] = self.position[p1,p1b]
+
+            self.position[p2,p2f] = x_new[2]*np.sign(p2)*np.sign(p2f)
+            self.position[p2f,p2] = self.position[p2,p2f]
+            
+          #  self.position = np.random.randint(3,size=(3,3))
+          #  self.position = (np.tril(self.position) + np.tril(self.position).T)
+          #  np.fill_diagonal(self.position,0)
+            
+            #self.position = self.position*0 + 1
+            
+            E_after = self.total_energy()
+            
+            if np.random.rand() < min(np.exp(-self.beta*(E_after - E_before)),1):
+                E = E_after
+                
+            else:
+                #reverse the swap and return positions
+                self.lattice = old
+                self.position = old_positions
+            self.counter += 1
+            self.results[self.counter] = E
+            
+            continue
+            
+      
+            
+import numpy as np
+import matplotlib.pyplot as plt
+L = 10
+a = Kawasaki_Discrete(L=L,seed = 1,max_x = 5)
+a.iterate(1000)
+#print(a.lattice)
+#print(a.E_values)
+plt.plot(a.results.keys(),a.results.values())
+print(a.position)
+
+
+
+energies = list(set(a.results.values()))
+import math
+occurences = [(i,list(a.results.values()).count(i)) for i in energies]
+print(occurences)
+
+sim_results = dict()
+theoretical_results = dict()
+
+data = np.array(list(a.results.values()))
+#print("d",data)
+count = len(data)
+arrangements = math.perm(a.L,2)
+if a.L > 2:
+    degeneracy_unbonded = math.perm(a.L,1)*math.perm(a.L-3,1)
+else:
+    degeneracy_unbonded = 0
+degeneracy_bonded = (arrangements - degeneracy_unbonded)
+print("AUB",arrangements,degeneracy_unbonded,degeneracy_bonded)
+
+
+#bonded is 0 or 1
+#unbonded is not all the things that are 0
+
+for x in set(data):
+    theoretical_results[x] = (1./len(set(data)))*degeneracy_bonded*np.exp(-a.beta*x) + (x==0)*degeneracy_unbonded
+    
+    
+theoretical_Z = np.sum(list(theoretical_results.values()))
+theoretical_results = dict(zip(theoretical_results.keys(),(1./theoretical_Z)*np.array(list(theoretical_results.values()))))
+
+
+for x in set(data):
+    #print("HERE",x,np.exp(-a.beta*x))
+    r = np.sum(data == x)/count
+    
+    sim_results[x] = r
+
+sim_Z = np.sum(list(sim_results.values()))
+sim_results = dict(zip(sim_results.keys(),(1./sim_Z)*np.array(list(sim_results.values()))))
+#print("ST",sim_results,theoretical_results)
+plt.scatter(theoretical_results.values(),sim_results.values())
+ #sim_results.keys()))
+plt.plot(theoretical_results.values(), theoretical_results.values())
+    #print(x,r)
+
+
