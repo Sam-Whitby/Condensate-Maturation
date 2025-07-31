@@ -14,13 +14,25 @@ class Kawasaki_Discrete:
         
         #first get the radius
         
-        radius = int(np.sqrt(particles)/np.pi)
-        print("HERE", radius)
+        radius_2 = int(particles/np.pi)
         
-        for p in range(0,particles):
-            #print(np.floor(p/self.L),p%self.L)
-            self.lattice[int(np.floor(p/self.L)),p%self.L] = p+1
+        p = 1
+        for coord,site in np.ndenumerate(self.lattice):
+            
+            dist = np.array(coord) - self.L/2
+            if np.dot(dist,dist) <= radius_2:
+                self.lattice[tuple(coord)] = p
+                p += 1
+                if p == particles:
+                    break
         
+        x0,y0 = np.where(self.lattice == 0)       
+        while p <= particles:
+            r = np.random.randint(len(x0))
+            if self.lattice[x0[r],y0[r]] == 0:
+                self.lattice[x0[r],y0[r]] = p
+                p += 1
+            
         
         self.unique = 1 + particles
         self.position = np.zeros((self.unique,self.unique),dtype=int)
@@ -36,7 +48,29 @@ class Kawasaki_Discrete:
         self.directions = self.neighbours
         #self.neighbours = np.array([-1,1])
         
-    
+    def draw_energies(self):
+        pairs = set()
+        for coord,site in np.ndenumerate(self.lattice): #range(0,len(self.lattice)):
+            
+            #site = self.lattice[i]
+            if site == 0: #no need to consider solvent
+                continue
+            for n in self.neighbours:
+                n_coord = (np.array(coord)+n)%self.L
+                neighbour = self.lattice[n_coord[0],n_coord[1]]
+                #print("HERE",self.counter,(np.array(coord)+n)%self.L)
+                if neighbour != 0:
+
+                    pairs.add((tuple(sorted([site,neighbour])),coord))
+        E_matrix = np.zeros((self.L,self.L))
+        for info in pairs:
+           # print("HERE",info)
+            p1,p2 = info[0]
+            coord = info[1]
+            E = -self.position[p1,p2]*np.sign(p1)*np.sign(p2)
+            
+            E_matrix[tuple(coord)] += E
+        return(E_matrix)
     
     def total_energy(self):
         E = 0
@@ -45,6 +79,8 @@ class Kawasaki_Discrete:
             p1,p2 = pair
         
             E += -self.position[p1,p2]*np.sign(p1)*np.sign(p2)
+        
+            
         return(E)
         #gets here, means we just need the 
         
@@ -69,10 +105,10 @@ class Kawasaki_Discrete:
         return(pairs)
     
     def update_position(self):
-        pairs = self.get_pairs()
-        self.pairs = len(pairs)
+        
+        
         #self.difs[self.counter] = len(pairs)
-        if self.pairs == 0:
+        if len(self.pairs) == 0:
             return()
         
         
@@ -80,7 +116,7 @@ class Kawasaki_Discrete:
         if np.random.rand() > self.D:
             return()
         
-        pair = list(pairs)[np.random.randint(self.pairs)]
+        pair = list(self.pairs)[np.random.randint(len(self.pairs))]
         p1,p2 = pair
 
         old = np.copy(self.position[p1,p2])
@@ -146,7 +182,7 @@ class Kawasaki_Discrete:
         
         if bond1+bond2+bond3+bond4+bond5+bond6+bond7 != 0:
             return()
-        old = np.copy(self.lattice)
+        #old = np.copy(self.lattice)
         old_positions = np.copy(self.position)
         
         
@@ -168,17 +204,7 @@ class Kawasaki_Discrete:
             self.position[p_i,p_env] = 0
             self.position[p_env,p_i] = 0
         
-    #    self.position[p1,p2] = x_new[0]*np.sign(p1)*np.sign(p2)
-    #    self.position[p2,p1] = self.position[p1,p2]
-
-     #   self.position[p2,p1b] = x_new[1]*np.sign(p2)*np.sign(p1b)
-     #   self.position[p1b,p2] = self.position[p2,p1b]
-
-     #   self.position[p1,p2f] = x_new[2]*np.sign(p1)*np.sign(p2f)
-     #   self.position[p2f,p1] = self.position[p1,p2f]
-        
-       
-        #now swap the positions on the lattice
+   
         
         temp = np.copy(self.lattice[tuple(site1)])
         self.lattice[tuple(site1)] = self.lattice[tuple(site2)]
@@ -191,24 +217,42 @@ class Kawasaki_Discrete:
         if np.random.rand() < min(np.exp(-self.beta*(E_after - self.E)),1):
             self.E = E_after
             self.swaps[self.counter] = 1
+            
+            #change pairs
+            
+            #p_i = p1
+        
+            for p_env in [p1b,p1u,p1d]:
+                self.pairs.discard(tuple(sorted([p1,p_env])))
+                self.pairs.add(tuple(sorted([p2,p_env])))
+                
+            for p_env in [p2f,p2u,p2d]:
+                self.pairs.discard(tuple(sorted([p2,p_env])))
+                self.pairs.add(tuple(sorted([p1,p_env])))
+            
+            
             return()
 
         #reverse the swap and return positions
-        self.lattice = np.copy(old)
+        temp = np.copy(self.lattice[tuple(site1)])
+        self.lattice[tuple(site1)] = self.lattice[tuple(site2)]
+        self.lattice[tuple(site2)] = temp
+        
         self.position = np.copy(old_positions)
      
     
     def iterate(self,iterations=0,every=1):
         
-        #print("HERE",self.lattice)
-        #print("BEFORE", self.lattice)
+        self.pairs = self.get_pairs()
+        #print("HERE",self.pairs)
         self.E = self.total_energy()
-        self.pair_count[self.counter] = 0
+        self.pair_count[self.counter] = len(self.pairs)
         self.results[self.counter] = self.E
         for iteration in range(0,iterations):
             
             self.Kawasaki()
             #
+            #for i in range(0,int(self.D)):
             self.update_position()
             if iteration%every==0:
                 self.results[self.counter] = self.E
@@ -219,21 +263,70 @@ class Kawasaki_Discrete:
 
 import numpy as np
 import matplotlib.pyplot as plt
-L = 100
-a = Kawasaki_Discrete(L=L,beta=1,particles=100,seed = 1,max_x = 5,D=1)
+L = 40
+a = Kawasaki_Discrete(L=L,beta=1,particles=600,seed = 3,max_x = 5,D=0.5)
 
-a.iterate(iterations=10,every=1)
+a.iterate(iterations=10000,every=1)
 
 #print(a.lattice)
 #print(a.E_values)
 #print(a.difs)
-plt.plot(a.results.keys(),[E/(2*a.max_x*a.particles) for E in a.results.values()])
-swaps = np.array([np.sum(list(a.swaps.values())[0:i]) for i in range(0,len(a.swaps.keys()))])
+plt.imshow(a.lattice != 0)
+plt.colorbar()
+
+
+#plt.plot(a.results.keys(),[E/(a.max_x*a.particles) for E in a.results.values()])
+#swaps = np.array([np.sum(list(a.swaps.values())[0:i]) for i in range(0,len(a.swaps.keys()))])
 #plt.plot(a.swaps.keys(),-swaps/swaps[-1])
 #plt.scatter(a.results.keys(),[E/a.max_x for E in a.results.values()],marker='.') #,c = ['r' if d==0 else 'g' for d in a.pair_count.values()])
 #print(a.position)
-print(a.lattice)
 #print(a.results)
 
 
+energies = list(set(a.results.values()))
+import math
+occurences = [(i,list(a.results.values()).count(i)) for i in energies]
+print(occurences)
 
+sim_results = dict()
+theoretical_results = dict()
+
+data = np.array(list(a.results.values()))
+#print("d",data)
+count = len(data)
+arrangements = math.perm(a.L,2)
+if a.L > 2:
+    degeneracy_unbonded = math.perm(a.L,1)*math.perm(a.L-3,1)
+else:
+    degeneracy_unbonded = 0
+degeneracy_bonded = (arrangements - degeneracy_unbonded)
+print("AUB",arrangements,degeneracy_unbonded,degeneracy_bonded)
+
+
+#bonded is 0 or 1
+#unbonded is not all the things that are 0
+
+for x in set(data):
+    theoretical_results[x] = degeneracy_bonded*np.exp(-a.beta*x) + (x==0)*degeneracy_unbonded
+    
+    
+theoretical_Z = np.sum(list(theoretical_results.values()))
+theoretical_results = dict(zip(theoretical_results.keys(),(1./theoretical_Z)*np.array(list(theoretical_results.values()))))
+
+
+for x in set(data):
+    #print("HERE",x,np.exp(-a.beta*x))
+    r = np.sum(data == x)/count
+    
+    sim_results[x] = r
+
+sim_Z = np.sum(list(sim_results.values()))
+sim_results = dict(zip(sim_results.keys(),(1./sim_Z)*np.array(list(sim_results.values()))))
+print("ST",sim_results,theoretical_results)
+plt.scatter(theoretical_results.values(),sim_results.values())
+ #sim_results.keys()))
+plt.plot(theoretical_results.values(), theoretical_results.values())
+    #print(x,r)
+
+#plt.ylim([0,1])
+#plt.xlim([0,1])
