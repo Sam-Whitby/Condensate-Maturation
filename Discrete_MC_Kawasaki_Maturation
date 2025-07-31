@@ -11,6 +11,8 @@ class Kawasaki_Discrete:
         self.counter = 0
         self.lattice = np.zeros((self.L,self.L),dtype=int)
         self.particles = particles
+        #self.FRAP = False
+        self.particle_locations = dict()
         
         #first get the radius
         
@@ -22,6 +24,7 @@ class Kawasaki_Discrete:
             dist = np.array(coord) - self.L/2
             if np.dot(dist,dist) <= radius_2:
                 self.lattice[tuple(coord)] = p
+                self.particle_locations[p] = tuple(coord)
                 p += 1
                 if p == particles:
                     break
@@ -31,6 +34,7 @@ class Kawasaki_Discrete:
             r = np.random.randint(len(x0))
             if self.lattice[x0[r],y0[r]] == 0:
                 self.lattice[x0[r],y0[r]] = p
+                self.particle_locations[p] = tuple(coord)
                 p += 1
             
         
@@ -120,12 +124,18 @@ class Kawasaki_Discrete:
         p1,p2 = pair
 
         old = np.copy(self.position[p1,p2])
+        old_bond_E = -old
        # new = np.random.randint(self.max_x+1)
         dx = np.random.choice([-1,1])
         new = min(max(old + dx,0),self.max_x)
         self.position[p1,p2] = new
         self.position[p2,p1] = new
-        new_E = self.total_energy()
+        new_bond_E = - self.position[p1,p2]
+        
+        
+        new_E = self.E - old_bond_E + new_bond_E # self.total_energy()
+        
+        
         if np.random.rand() < np.exp(-self.beta*(new_E - self.E)):
             self.E = new_E
         else:
@@ -144,8 +154,11 @@ class Kawasaki_Discrete:
         direction = self.directions[np.random.randint(len(self.directions))]
         perp = np.sum(direction) - direction
         #direction = np.random.choice(self.directions)
-        x,y = np.where(self.lattice != 0)
-        site1 = np.array([np.random.choice(x),np.random.choice(y)])
+        particle = 1+np.random.randint(a.particles)
+        
+        #x,y = self.particle_locations[particle] #np.where(self.lattice != 0)
+        #print(self.counter,particle,x)
+        site1 = a.particle_locations[particle]
         #site1 = np.random.choice(np.where(self.lattice != 0)[0])
         site2 = (site1 + direction)%self.L
         
@@ -211,7 +224,7 @@ class Kawasaki_Discrete:
         self.lattice[tuple(site2)] = temp
         
  
-        E_after = self.total_energy()
+        E_after = self.E #E_before #self.total_energy()
       
         
         if np.random.rand() < min(np.exp(-self.beta*(E_after - self.E)),1):
@@ -230,7 +243,10 @@ class Kawasaki_Discrete:
                 self.pairs.discard(tuple(sorted([p2,p_env])))
                 self.pairs.add(tuple(sorted([p1,p_env])))
             
+            if p2 != 0:
+                self.particle_locations[p2] = site1
             
+            self.particle_locations[p1] = site2
             return()
 
         #reverse the swap and return positions
@@ -239,6 +255,29 @@ class Kawasaki_Discrete:
         self.lattice[tuple(site2)] = temp
         
         self.position = np.copy(old_positions)
+        
+    def show(self,bleached=False):
+        if not bleached:
+            plt.imshow(self.lattice != 0)
+        else:
+            print("SHOWING BLEACHED")
+            bl = np.zeros_like(self.lattice)
+            for c,v in np.ndenumerate(self.lattice):
+                if v not in self.bleached:
+                    bl[c] = v
+            plt.imshow(bl != 0)
+            
+            
+        
+    def FRAP(self,radius):
+        
+        self.bleached = set()
+        for coord,site in np.ndenumerate(self.lattice):
+            
+            dist = np.array(coord) - self.L/2
+            if np.dot(dist,dist) <= radius**2:
+                self.bleached.add(site)
+        
      
     
     def iterate(self,iterations=0,every=1):
@@ -263,16 +302,20 @@ class Kawasaki_Discrete:
 
 import numpy as np
 import matplotlib.pyplot as plt
-L = 40
-a = Kawasaki_Discrete(L=L,beta=1,particles=600,seed = 3,max_x = 5,D=0.5)
+L = 30
+a = Kawasaki_Discrete(L=L,beta=1,particles=500,seed = 3,max_x = 5,D=0.1)
 
+a.FRAP(10)
+
+#print(a.bleached)
 a.iterate(iterations=10000,every=1)
+a.show(bleached=True)
 
 #print(a.lattice)
 #print(a.E_values)
 #print(a.difs)
-plt.imshow(a.lattice != 0)
-plt.colorbar()
+#plt.imshow(a.lattice != 0)
+#plt.colorbar()
 
 
 #plt.plot(a.results.keys(),[E/(a.max_x*a.particles) for E in a.results.values()])
@@ -281,52 +324,3 @@ plt.colorbar()
 #plt.scatter(a.results.keys(),[E/a.max_x for E in a.results.values()],marker='.') #,c = ['r' if d==0 else 'g' for d in a.pair_count.values()])
 #print(a.position)
 #print(a.results)
-
-
-energies = list(set(a.results.values()))
-import math
-occurences = [(i,list(a.results.values()).count(i)) for i in energies]
-print(occurences)
-
-sim_results = dict()
-theoretical_results = dict()
-
-data = np.array(list(a.results.values()))
-#print("d",data)
-count = len(data)
-arrangements = math.perm(a.L,2)
-if a.L > 2:
-    degeneracy_unbonded = math.perm(a.L,1)*math.perm(a.L-3,1)
-else:
-    degeneracy_unbonded = 0
-degeneracy_bonded = (arrangements - degeneracy_unbonded)
-print("AUB",arrangements,degeneracy_unbonded,degeneracy_bonded)
-
-
-#bonded is 0 or 1
-#unbonded is not all the things that are 0
-
-for x in set(data):
-    theoretical_results[x] = degeneracy_bonded*np.exp(-a.beta*x) + (x==0)*degeneracy_unbonded
-    
-    
-theoretical_Z = np.sum(list(theoretical_results.values()))
-theoretical_results = dict(zip(theoretical_results.keys(),(1./theoretical_Z)*np.array(list(theoretical_results.values()))))
-
-
-for x in set(data):
-    #print("HERE",x,np.exp(-a.beta*x))
-    r = np.sum(data == x)/count
-    
-    sim_results[x] = r
-
-sim_Z = np.sum(list(sim_results.values()))
-sim_results = dict(zip(sim_results.keys(),(1./sim_Z)*np.array(list(sim_results.values()))))
-print("ST",sim_results,theoretical_results)
-plt.scatter(theoretical_results.values(),sim_results.values())
- #sim_results.keys()))
-plt.plot(theoretical_results.values(), theoretical_results.values())
-    #print(x,r)
-
-#plt.ylim([0,1])
-#plt.xlim([0,1])
