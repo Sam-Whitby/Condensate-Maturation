@@ -277,28 +277,22 @@ class Kawasaki_Discrete:
         bond_list = bond_site1_site2+site1_bonds+site2_bonds
         
        # print("HERE",self.counter,self.lattice,bond_list,(bond_site1_site2,site1_bonds,site2_bonds))
-        if self.initial_bonding_position == 1:
-            if len(set(bond_list)-{0,1}) != 0:
-                return()
-
-            #if sum(bond_list) != 1:
-            #    return()
-        
-        elif self.initial_bonding_position == 0:
-            if sum(set(bond_list)) != 0:
-                return()
+        #condition for accepting is that only has 0 and initial in bonds
+        if len(set(bond_list)-{0,self.initial_bonding_position}) != 0:
+            return()
+            
         
     
         old_positions = np.copy(self.position)
         
         
         
-        x_new = np.random.choice([0,1],
-                                 p=[self.initial_bonding_position==0,
-                                    self.initial_bonding_position==1],
-                                 size=len(bond_list))
+      #  x_new = np.random.choice([0,1],
+       #                          p=[self.initial_bonding_position==0,
+        #                            self.initial_bonding_position==1],
+         #                        size=len(bond_list))
         
-        
+        x_new = np.array([self.initial_bonding_position]*len(bond_list))
         #there are three bonds which are broken in 1d Kawasaki
         
        
@@ -441,9 +435,9 @@ class Kawasaki_Discrete:
 import numpy as np
 import matplotlib.pyplot as plt
 import time
-L = 4
+L = 5
 a = Kawasaki_Discrete(L=L,dimension=1,beta=1,particles=2,
-                      seed = 4,max_x = 1,D=1,initial_bonding_position=1)
+                      seed = 4,max_x = 3,D=1,initial_bonding_position=2)
 print(a.lattice)
 
 #print(a.E)
