@@ -19,7 +19,7 @@ class Kawasaki_Discrete:
         if max_states == None:
             self.DX = 1
         else:
-            self.DX = int((self.max_x - self.initial_bonding_position)/self.max_states)
+            self.DX = max(int((self.max_x - self.initial_bonding_position)/self.max_states),1)
         
         radius_2 = int(particles/np.pi)
         #first get the radius
@@ -126,12 +126,16 @@ class Kawasaki_Discrete:
             degeneracy_unbonded = 0
         degeneracy_bonded = (arrangements - degeneracy_unbonded)
         print("AUB",arrangements,degeneracy_unbonded,degeneracy_bonded)
-
+        if degeneracy_unbonded > 0:
+            to_add = {0}
+        else:
+            to_add = set()
+        energy_values = set(data).union(to_add)
 
         #bonded is 0 or 1
         #unbonded is not all the things that are 0
 
-        for x in set(data):
+        for x in energy_values:
             print("x=",x,(x <= -self.initial_bonding_position),degeneracy_bonded,np.exp(-self.beta*x),(x==0)*degeneracy_unbonded)
             theoretical_results[x] = (x <= -self.initial_bonding_position)*degeneracy_bonded*np.exp(-self.beta*x) + (x==0)*degeneracy_unbonded
 
@@ -140,7 +144,7 @@ class Kawasaki_Discrete:
         theoretical_results = dict(zip(theoretical_results.keys(),(1./theoretical_Z)*np.array(list(theoretical_results.values()))))
 
 
-        for x in set(data):
+        for x in energy_values:
             
             r = np.sum(data == x)/count
 
@@ -447,13 +451,15 @@ class Kawasaki_Discrete:
 import numpy as np
 import matplotlib.pyplot as plt
 import time
-L = 100
-a = Kawasaki_Discrete(L=L,dimension=1,beta=0.01,particles=2,
-                      seed = 4,max_states=5,max_x = 200,D=1,initial_bonding_position=100)
+L = 10
+
+a = Kawasaki_Discrete(L=L,dimension=1,beta=1,particles=2,
+                      seed = 4,D=1,
+                      max_states=5,max_x = 5,initial_bonding_position=1)
 
 
 #print(a.E,a.lattice)
-a.iterate(iterations = 100000,snaps=0)
+a.iterate(iterations = 10000,snaps=0)
 #print(a.E,a.lattice)
 #plt.imshow(a.lattice)
 #a.FRAP(10)
