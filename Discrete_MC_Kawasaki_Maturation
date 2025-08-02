@@ -2,7 +2,8 @@ import math
 class Kawasaki_Discrete:
    
     
-    def __init__(self,beta=1,dimension=1,particles=2,L=5,seed=0,max_x = 0,D=1):
+    def __init__(self,beta=1,dimension=1,particles=2,L=5,seed=0,max_x = 0,D=1,
+                initial_bonding_position = 0):
         
         self.dimensions = dimension
         np.random.seed(seed)
@@ -10,7 +11,7 @@ class Kawasaki_Discrete:
         self.beta= beta
         self.L = L
         self.counter = 0
-        self.initial_bonding_position = 0
+        self.initial_bonding_position = initial_bonding_position
         
         radius_2 = int(particles/np.pi)
         #first get the radius
@@ -93,6 +94,7 @@ class Kawasaki_Discrete:
         self.swaps = dict()
         
         self.lattice_snaps = dict()
+        self.E = self.total_energy()
         #self.neighbours = np.array([-1,1])
         
         
@@ -123,8 +125,8 @@ class Kawasaki_Discrete:
         #unbonded is not all the things that are 0
 
         for x in set(data):
-            print("x=",x,degeneracy_bonded,np.exp(-self.beta*x))
-            theoretical_results[x] = degeneracy_bonded*np.exp(-self.beta*x) + (x==0)*degeneracy_unbonded
+            print("x=",x,(x <= -self.initial_bonding_position),degeneracy_bonded,np.exp(-self.beta*x),(x==0)*degeneracy_unbonded)
+            theoretical_results[x] = (x <= -self.initial_bonding_position)*degeneracy_bonded*np.exp(-self.beta*x) + (x==0)*degeneracy_unbonded
 
 
         theoretical_Z = np.sum(list(theoretical_results.values()))
@@ -132,7 +134,7 @@ class Kawasaki_Discrete:
 
 
         for x in set(data):
-            #print("HERE",x,np.exp(-a.beta*x))
+            
             r = np.sum(data == x)/count
 
             sim_results[x] = r
@@ -221,12 +223,14 @@ class Kawasaki_Discrete:
        # new = np.random.randint(self.max_x+1)
         dx = np.random.choice([-1,1])
         new = min(max(old + dx,self.initial_bonding_position),self.max_x)
+        
         self.position[p1,p2] = new
         self.position[p2,p1] = new
         new_bond_E = - self.position[p1,p2]
         
         
         new_E = self.E - old_bond_E + new_bond_E # self.total_energy()
+       # print("UPDATE",self.counter,self.E,old_bond_E,new_bond_E,new_E)
         #print("UPDATE",-self.beta*(new_E - self.E))
         
         if np.random.rand() < np.exp(-self.beta*(new_E - self.E)):
@@ -253,76 +257,38 @@ class Kawasaki_Discrete:
         
       #  perp = np.sum(direction) - direction
         
-        particle = 1+np.random.randint(a.particles)
+        particle = 1+np.random.randint(self.particles)
         
         
-        site1 = tuple(a.particle_locations[particle] + np.array([0]))
+        site1 = tuple(self.particle_locations[particle] + np.array([0]))
         
         site2 = tuple((site1 + direction)%self.L)
         
         
-       # print("SITE1_SITE2_", site1,site2)
         
-       
-        
-        
-        #need to make a list of the bonds around each site.
-        #this list should work for 1 and 2d (so that I can check still Boltzmann)
-        #print("STARTS", self.position,direction)
-        #print("direction",direction,self.neighbour_ids[1:])
+
         site1_env = [self.lattice[tuple((site1+self.neighbours[n_id])%self.L)] for n_id in self.neighbour_ids[1:]]
         site2_env = [self.lattice[tuple((site2-self.neighbours[n_id])%self.L)] for n_id in self.neighbour_ids[1:]]
-       # print("s1_env",[site1 for direction in self.neighbours[1:]])
-       # print("s2_env",[site2 for direction in self.neighbours[1:]])
-        #now - we only allow a bond to be changed if all the bonds add up to 0 or 1 (or whatever, but some condition)
+      
         bond_site1_site2 = [self.position[self.lattice[site1],self.lattice[site2]]*np.sign(self.lattice[site1])*np.sign(self.lattice[site2])]
         site1_bonds = [self.position[self.lattice[site1],p]*np.sign(self.lattice[site1])*np.sign(p) for p in site1_env]
         site2_bonds = [self.position[self.lattice[site2],p]*np.sign(self.lattice[site2])*np.sign(p) for p in site2_env]
         
-       # print("BS", site1,site2,site1_env,site2_env,self.lattice,bond_site1_site2,site1_bonds,site2_bonds,direction)
-       # print(self.position)
-       # print(bond_site1_site2+site1_bonds+site2_bonds)
-        
         bond_list = bond_site1_site2+site1_bonds+site2_bonds
-       # print("BL", bond_list)
-        #print(site1,site2,"S1env", site1_env,"S2env", site2_env,self.lattice)
         
-        #bond_set = set(list(site1_bonds) + list(site2_bonds) + [list(bond_site1_site2)])
-   #     p1b = self.lattice[tuple((site1-direction)%self.L)]
-   #     p1u = self.lattice[tuple((site1+perp)%self.L)]
-   #     p1d = self.lattice[tuple((site1-perp)%self.L)]
-   #     p1 = self.lattice[tuple(site1)]
-   #     p2 = self.lattice[tuple(site2)]
-   #     p2f = self.lattice[tuple((site2+direction)%self.L)]
-   #     p2u = self.lattice[tuple((site2+perp)%self.L)]
-   #     p2d = self.lattice[tuple((site2-perp)%self.L)]
-        
-     #   bond1 = self.position[p1,p2]*np.sign(p1)*np.sign(p2)
-        
-     #   bond2 = self.position[p1,p1b]*np.sign(p1)*np.sign(p1b)
-     #   bond3 = self.position[p2,p2f]*np.sign(p2)*np.sign(p2f)
-        
-     #   bond4 = self.position[p2,p2u]*np.sign(p2)*np.sign(p2u)
-      #  bond5 = self.position[p2,p2d]*np.sign(p2)*np.sign(p2d)
-        
-      #  bond6 = self.position[p1,p1u]*np.sign(p1)*np.sign(p1u)
-      #  bond7 = self.position[p1,p1d]*np.sign(p1)*np.sign(p1d)
-        
-        #print("HERE", self.counter,bond1,bond2,bond3,bond4,bond5,bond6,bond7)
-    #    bond_set = {bond1,bond2,bond3,bond4,bond5,bond6,bond7}
+       # print("HERE",self.counter,self.lattice,bond_list,(bond_site1_site2,site1_bonds,site2_bonds))
         if self.initial_bonding_position == 1:
-            if len(set(bond_list)) != 2:
+            if len(set(bond_list)-{0,1}) != 0:
                 return()
 
-            if sum(bond_list) != 1:
-                return()
+            #if sum(bond_list) != 1:
+            #    return()
         
         elif self.initial_bonding_position == 0:
             if sum(set(bond_list)) != 0:
                 return()
         
     
-        #print("HERE")
         old_positions = np.copy(self.position)
         
         
@@ -336,20 +302,17 @@ class Kawasaki_Discrete:
         #there are three bonds which are broken in 1d Kawasaki
         
        
-        
         dE = np.sum(bond_list)
-        #print("dE", dE)
-        
-        #print("GETS HERE", dE, bond_list)
-        #print("S1", site1,self.lattice[site1])
+       
         
         p1 = self.lattice[site1]
         p2 = self.lattice[site2]
         
-        #print("P1p2", tuple(p1),p2,site1,site2)
+       
         
         self.position[p1,p2] = x_new[0]*np.sign(p1)*np.sign(p2)
         self.position[p2,p1] = self.position[p2,p1]
+        dE += self.position[p1,p2]
         
         v = 1
         for p_env in site1_env:
@@ -359,7 +322,7 @@ class Kawasaki_Discrete:
             self.position[p2,p_env] = x_new[v]*np.sign(p2)*np.sign(p_env)
             self.position[p_env,p2] = self.position[p2,p_env]
             
-            dE -= self.position[p1,p_env]
+            #dE -= self.position[p1,p_env]
             dE += self.position[p2,p_env]
             v += 1
             
@@ -370,7 +333,7 @@ class Kawasaki_Discrete:
             self.position[p1,p_env] = x_new[v]*np.sign(p1)*np.sign(p_env)
             self.position[p_env,p1] = self.position[p1,p_env]
             
-            dE -= self.position[p2,p_env]
+            #dE -= self.position[p2,p_env]
             dE += self.position[p1,p_env]
             v += 1
         
@@ -380,22 +343,16 @@ class Kawasaki_Discrete:
         self.lattice[tuple(site1)] = self.lattice[tuple(site2)]
         self.lattice[tuple(site2)] = temp
         
- 
-        E_after = -(self.E+dE) #self.total_energy()
-       # print("Makes", self.E, dE,E_after)
-        #print(self.counter,"HERE",E_after,)
-      
+       # print("SITES", site1,site2,site1_env,site2_env,self.particle_locations,self.lattice,x_new,dE)
+        E_after = -(self.E+dE) 
+       
         
         if np.random.rand() < min(np.exp(-self.beta*(E_after - self.E)),1):
-            #print("SWAP", self.counter,p1,p2,site1,site2,self.position[p1,p2])
+            
             self.E = E_after
             self.swaps[self.counter] = 1
             
-            #change pairs
-            
-            #p_i = p1
-            
-            #print("change pairs",(p2,p1b,p1u,p1d),(p1,p2f,p2u,p2d))
+         
         
             for p_env in site1_env:
                 #print("TRYING", p_env,p1)
@@ -466,11 +423,9 @@ class Kawasaki_Discrete:
         self.pair_count[self.counter] = len(self.pairs)
         self.results[self.counter] = self.E
         for iteration in range(0,iterations):
-           # print("I",iteration,self.lattice,self.E)
+            #print("BEGIN", iteration,self.E)
             self.Kawasaki()
-            #print("I2",iteration,self.lattice,self.E)
-            #
-            #for i in range(0,int(self.D)):
+            #print("K", iteration,self.E)
             self.update_position()
             if iteration%every==0:
                 t2 = time.time()
@@ -486,21 +441,18 @@ class Kawasaki_Discrete:
 import numpy as np
 import matplotlib.pyplot as plt
 import time
-L = 3
-a = Kawasaki_Discrete(L=L,dimension=1,beta=1,particles=2,seed = 4,max_x = 3,D=1)
+L = 4
+a = Kawasaki_Discrete(L=L,dimension=1,beta=1,particles=2,
+                      seed = 4,max_x = 1,D=1,initial_bonding_position=1)
 print(a.lattice)
-#a.FRAP(10)
-#print(a.total_energy())
-#print(a.bleached)
+
+#print(a.E)
 a.iterate(iterations = 10000,snaps=0)
-print(a.lattice)
-#print("pairs",a.pairs)
-#print(a.total_energy())
 #print(a.results)
-#print("pairs",a.pairs)
 #print(a.lattice)
 #print(a.E)
+
 #plt.plot(a.results.values())
 a.compare_Boltzmann()
-#a.show(bleached=False,plot=True)
+
 
