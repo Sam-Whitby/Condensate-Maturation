@@ -3,7 +3,9 @@ class Kawasaki_Discrete:
    
     
     def __init__(self,beta=1,dimension=1,particles=2,L=5,seed=0,max_x = 0,D=1,
-                initial_bonding_position = 0):
+                initial_bonding_position = 0,max_states=None):
+        
+        
         
         self.dimensions = dimension
         np.random.seed(seed)
@@ -12,6 +14,12 @@ class Kawasaki_Discrete:
         self.L = L
         self.counter = 0
         self.initial_bonding_position = initial_bonding_position
+        
+        self.max_states = max_states
+        if max_states == None:
+            self.DX = 1
+        else:
+            self.DX = int((self.max_x - self.initial_bonding_position)/self.max_states)
         
         radius_2 = int(particles/np.pi)
         #first get the radius
@@ -220,7 +228,7 @@ class Kawasaki_Discrete:
         old = np.copy(self.position[p1,p2])
         old_bond_E = -old
        # new = np.random.randint(self.max_x+1)
-        dx = np.random.choice([-1,1])
+        dx = np.random.choice([-self.DX,self.DX])
         new = min(max(old + dx,self.initial_bonding_position),self.max_x)
         
         self.position[p1,p2] = new
@@ -439,17 +447,17 @@ class Kawasaki_Discrete:
 import numpy as np
 import matplotlib.pyplot as plt
 import time
-L = 4
-a = Kawasaki_Discrete(L=L,dimension=1,beta=0,particles=2,
-                      seed = 4,max_x = 3,D=1,initial_bonding_position=1)
+L = 100
+a = Kawasaki_Discrete(L=L,dimension=1,beta=0.01,particles=2,
+                      seed = 4,max_states=5,max_x = 200,D=1,initial_bonding_position=100)
 
 
 #print(a.E,a.lattice)
-a.iterate(iterations = 10000,snaps=0)
+a.iterate(iterations = 100000,snaps=0)
 #print(a.E,a.lattice)
 #plt.imshow(a.lattice)
 #a.FRAP(10)
-#a.iterate(iterations = 1000,snaps=2)
+#a.iterate(iterations = 10000,snaps=10)
 #a.show(bleached=True)
 #
 
