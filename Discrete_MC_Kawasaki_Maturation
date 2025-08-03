@@ -1,5 +1,6 @@
 import math
 from itertools import compress
+from scipy.stats import multinomial
 class Kawasaki_Discrete:
    
     
@@ -471,7 +472,7 @@ class Kawasaki_Discrete:
                     if v not in self.bleached:
                         bl[c] = v
                     else:
-                        frame_dist = self.frame[v] - self.frame_snaps[self.bleach_time][v]
+                        frame_dist = self.frame_snaps[k][v] - self.frame_snaps[self.bleach_time][v]
                         if np.dot(frame_dist,frame_dist) != 0:
                             bl[c] = v   
             else:
@@ -506,7 +507,7 @@ class Kawasaki_Discrete:
                 self.pair_count[self.counter] = self.pairs
                 self.lattice_snaps[self.counter] = np.copy(self.lattice) #self.draw_energies() # self.show(bleached=True,plot=False)
                 self.energy_snaps[self.counter] = self.draw_energies() # self.show(bleached=True,plot=False)
-            
+                self.frame_snaps[self.counter] = {k: np.array(v) for k, v in self.frame.items()}
             #print("BEGIN", iteration,self.E)
             self.Kawasaki()
             #print("K", iteration,self.E,self.lattice)
