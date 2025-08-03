@@ -103,6 +103,9 @@ class Kawasaki_Discrete:
         
         self.lattice_snaps = dict()
         self.E = self.total_energy()
+        self.possible_positions = [i for i in range(self.initial_bonding_position,self.max_x+1)]
+        self.acceptance_probabilities = [1./(1+self.max_x-self.initial_bonding_position)]*(1+self.max_x-self.initial_bonding_position)
+        
         #self.neighbours = np.array([-1,1])
         
         
@@ -302,7 +305,7 @@ class Kawasaki_Discrete:
         
         outcome_count = [pp_bonds.count(v) for v in range(self.initial_bonding_position,self.max_x+1)]
         #print(self.counter,"oc",outcome_count,"p",[1./(1+self.max_x-self.initial_bonding_position)]*(1+self.max_x-self.initial_bonding_position))
-        p = multinomial.pmf(outcome_count, n=len(pp_bonds), p=[1./(1+self.max_x-self.initial_bonding_position)]*(1+self.max_x-self.initial_bonding_position))
+        p = multinomial.pmf(outcome_count, n=len(pp_bonds), p=self.acceptance_probabilities)
         #print(self.counter,"p",p)
 
         
@@ -325,7 +328,11 @@ class Kawasaki_Discrete:
          #                        size=len(bond_list))
         
        # x_new = np.array([self.initial_bonding_position]*len(bond_list))
-        x_new = np.random.randint(self.initial_bonding_position,self.max_x+1,size=len(bond_list))
+        
+        
+        
+        x_new = np.random.choice(self.possible_positions,len(bond_list),self.acceptance_probabilities)
+        #x_new = np.random.randint(self.initial_bonding_position,self.max_x+1,size=len(bond_list))
         #there are three bonds which are broken in 1d Kawasaki
         
        
@@ -474,14 +481,14 @@ class Kawasaki_Discrete:
 import numpy as np
 import matplotlib.pyplot as plt
 import time
-L = 100
+L = 4
 
 a = Kawasaki_Discrete(L=L,dimension=1,beta=1,particles=2,
-                      seed = 4,D=0.01,
-                      max_states=5,max_x = 5,initial_bonding_position=1)
+                      seed = 4,D=1,
+                      max_states=3,max_x = 3,initial_bonding_position=1)
 
 
-a.iterate(iterations = 100000,snaps=0)
+a.iterate(iterations = 10000,snaps=0)
 
 #a.FRAP(10)
 #a.iterate(iterations = 10000,snaps=2)
@@ -492,7 +499,7 @@ a.iterate(iterations = 100000,snaps=0)
 
 #plt.plot(a.results.keys(),np.array(list(a.results.values())))
 #swaps = np.array([np.sum(list(a.swaps.values())[0:i]) for i in range(0,len(a.swaps.keys()))])
-##plt.plot(a.swaps.keys(),-swaps)
+#plt.plot(a.swaps.keys(),swaps)
 a.compare_Boltzmann()
 
 
