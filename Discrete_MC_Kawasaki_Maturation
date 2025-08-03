@@ -241,7 +241,7 @@ class Kawasaki_Discrete:
         
         
         new_E = self.E - old_bond_E + new_bond_E # self.total_energy()
-       # print("UPDATE",self.counter,self.E,old_bond_E,new_bond_E,new_E)
+     #   print("UPDATE",self.counter,self.E,old_bond_E,new_bond_E,new_E,np.exp(-self.beta*(new_E - self.E)))
         #print("UPDATE",-self.beta*(new_E - self.E))
         
         if np.random.rand() < np.exp(-self.beta*(new_E - self.E)):
@@ -254,6 +254,8 @@ class Kawasaki_Discrete:
         
         
     def Kawasaki(self):
+        
+        self.swaps[self.counter] = 0
         
         #get old stuff copied
         
@@ -382,6 +384,7 @@ class Kawasaki_Discrete:
             return()
 
         #reverse the swap and return positions
+        
         temp = np.copy(self.lattice[tuple(site1)])
         self.lattice[tuple(site1)] = self.lattice[tuple(site2)]
         self.lattice[tuple(site2)] = temp
@@ -451,23 +454,24 @@ class Kawasaki_Discrete:
 import numpy as np
 import matplotlib.pyplot as plt
 import time
-L = 10
+L = 5
 
-a = Kawasaki_Discrete(L=L,dimension=1,beta=1,particles=2,
+a = Kawasaki_Discrete(L=L,dimension=1,beta=0,particles=5,
                       seed = 4,D=1,
-                      max_states=5,max_x = 5,initial_bonding_position=1)
+                      max_states=3,max_x = 1001,initial_bonding_position=1000)
 
 
-#print(a.E,a.lattice)
-a.iterate(iterations = 10000,snaps=0)
-#print(a.E,a.lattice)
-#plt.imshow(a.lattice)
+a.iterate(iterations = 1000,snaps=0)
+
 #a.FRAP(10)
-#a.iterate(iterations = 10000,snaps=10)
+#a.iterate(iterations = 10000,snaps=2)
+
 #a.show(bleached=True)
 #
 
-#plt.plot(a.results.keys(),a.results.values())
-a.compare_Boltzmann()
+#plt.plot(a.results.keys(),np.array(list(a.results.values()))*(a.beta/a.particles))
+swaps = np.array([np.sum(list(a.swaps.values())[0:i]) for i in range(0,len(a.swaps.keys()))])
+plt.plot(a.swaps.keys(),-swaps)
+#a.compare_Boltzmann()
 
 
