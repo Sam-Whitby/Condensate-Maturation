@@ -5,7 +5,7 @@ class Kawasaki_Discrete:
     
     def __init__(self,beta=1,dimension=1,particles=2,L=5,seed=0,max_x = 0,D=1,
                 initial_bonding_position = 0,max_states=None,probs=None):
-        
+        self.frame_snaps = dict()
         self.energy_snaps = dict()
         self.bleach_time = 1E9
         self.dimensions = dimension
@@ -20,7 +20,7 @@ class Kawasaki_Discrete:
         if max_states == None:
             self.DX = 1
         else:
-            self.DX = max(int((self.max_x - self.initial_bonding_position)/self.max_states),1)
+            self.DX = max(int((self.max_x - self.initial_bonding_position)/(self.max_states+1)),1)
         
         self.possible_positions = [i for i in range(self.initial_bonding_position,self.max_x+1,self.DX)]
         
@@ -29,7 +29,7 @@ class Kawasaki_Discrete:
         else:
             self.acceptance_probabilities = probs
         
-        print(self.max_states,self.DX,self.possible_positions,self.acceptance_probabilities)
+        #print(self.max_states,self.DX,self.possible_positions,self.acceptance_probabilities)
         
         radius_2 = int(particles/np.pi)
         #first get the radius
@@ -99,6 +99,12 @@ class Kawasaki_Discrete:
         
         self.unique = 1 + particles
         self.position = np.zeros((self.unique,self.unique),dtype=int)
+        self.frame = np.zeros(self.unique,dtype=object)
+        self.frame = dict(zip([p for p in range(0,self.unique)],[np.array([0]*self.dimensions) for p in range(0,self.unique)]))
+        
+        
+        #frame is updated if a swap happens which crosses the boundary
+        #direction
         
         pairs = self.get_pairs()
         for pair in pairs:
@@ -285,7 +291,10 @@ class Kawasaki_Discrete:
         
         site1 = tuple(self.particle_locations[particle] + np.array([0]))
         
-        site2 = tuple((site1 + direction)%self.L)
+        adjacent_coordinate = site1 + direction
+        PBC_adjacent_coordinate = adjacent_coordinate%self.L
+
+        site2 = tuple(PBC_adjacent_coordinate)
         
         #determine whether it's particle-particle interaction
         
@@ -370,6 +379,7 @@ class Kawasaki_Discrete:
       
         
         if np.random.rand() < min(np.exp(-self.beta*(E_after - self.E)),1):
+            
           
             self.E = E_after
             self.swaps[self.counter] = 1
@@ -391,6 +401,19 @@ class Kawasaki_Discrete:
                 self.particle_locations[p2] = site1
             
             self.particle_locations[p1] = site2
+            
+            #lastly update the frame
+            
+            if not np.array_equal(adjacent_coordinate,PBC_adjacent_coordinate):
+                
+                self.frame[p1] += direction
+                #print("HERE",adjacent_coordinate,PBC_adjacent_coordinate,direction,self.frame)
+                if p2 != 0:
+                    self.frame[p2] -= direction
+                    
+                
+                
+                
             return()
 
         #reverse the swap and return positions
@@ -431,6 +454,7 @@ class Kawasaki_Discrete:
             if np.dot(dist,dist) <= radius**2:
                 self.bleached.add(site)
         self.lattice_snaps[self.counter] = self.lattice
+        self.frame_snaps[self.counter] = {k: np.array(v) for k, v in self.frame.items()}
         
     def history(self,bleached=False):
         print(self.lattice_snaps.keys())
@@ -441,11 +465,15 @@ class Kawasaki_Discrete:
             #print(i,k)
             l = self.lattice_snaps[k] #/(4*self.max_x)
             if bleached and k >= self.bleach_time:
-                print("HERE", k)
+                
                 bl = np.zeros_like(l)
                 for c,v in np.ndenumerate(l):
                     if v not in self.bleached:
                         bl[c] = v
+                    else:
+                        frame_dist = self.frame[v] - self.frame_snaps[self.bleach_time][v]
+                        if np.dot(frame_dist,frame_dist) != 0:
+                            bl[c] = v   
             else:
                 bl = l
             axs[i].imshow(bl,vmin=0,vmax=1)
@@ -467,7 +495,7 @@ class Kawasaki_Discrete:
         self.E = self.total_energy()
         self.pair_count[self.counter] = len(self.pairs)
         self.results[self.counter] = self.E
-        for iteration in range(0,iterations+1):
+        for iteration in range(0,iterations):
             #print("BEGIN", iteration,self.E)
             self.Kawasaki()
             #print("K", iteration,self.E,self.lattice)
@@ -482,26 +510,28 @@ class Kawasaki_Discrete:
                 self.lattice_snaps[self.counter] = np.copy(self.lattice) #self.draw_energies() # self.show(bleached=True,plot=False)
                 self.energy_snaps[self.counter] = self.draw_energies() # self.show(bleached=True,plot=False)
             self.counter += 1
-        self.counter -= 1
+        #self.counter -= 1
             
             
 
 import numpy as np
 import matplotlib.pyplot as plt
 import time
-L = 20
+L = 40
 
-a = Kawasaki_Discrete(L=L,dimension=2,beta=0.08,particles=200,
+a = Kawasaki_Discrete(L=L,dimension=2,beta=0.08,particles=700,
                       seed = 4,D=0,
-                      max_states=6,max_x = 40,
+                      max_states=1,max_x = 20,
                       initial_bonding_position=20,
-                     probs = [1,0,0,0,0,0])
+                     probs = [1])
 
 
-a.iterate(iterations = 1000,snaps=3)
+a.iterate(iterations = 10000,snaps=5)
 
-a.FRAP(3)
-a.iterate(iterations = 1000,snaps=3)
+a.FRAP(10)
+a.iterate(iterations = 10000,snaps=5)
+#a.FRAP(3)
+#a.iterate(iterations = 1000,snaps=3)
 #a.iterate(iterations = 10000,snaps=2)
 
 #a.show(bleached=False)
