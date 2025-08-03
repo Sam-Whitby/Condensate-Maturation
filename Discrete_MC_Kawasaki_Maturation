@@ -6,8 +6,8 @@ class Kawasaki_Discrete:
     def __init__(self,beta=1,dimension=1,particles=2,L=5,seed=0,max_x = 0,D=1,
                 initial_bonding_position = 0,max_states=None,probs=None):
         
-        
-        
+        self.energy_snaps = dict()
+        self.bleach_time = 1E9
         self.dimensions = dimension
         np.random.seed(seed)
         self.max_x = max_x
@@ -16,11 +16,20 @@ class Kawasaki_Discrete:
         self.counter = 0
         self.initial_bonding_position = initial_bonding_position
         
-        self.max_states = max_states
+        self.max_states = max_states-1
         if max_states == None:
             self.DX = 1
         else:
             self.DX = max(int((self.max_x - self.initial_bonding_position)/self.max_states),1)
+        
+        self.possible_positions = [i for i in range(self.initial_bonding_position,self.max_x+1,self.DX)]
+        
+        if probs == None:
+            self.acceptance_probabilities = [1./(1+self.max_x-self.initial_bonding_position)]*(self.max_states+1)
+        else:
+            self.acceptance_probabilities = probs
+        
+        print(self.max_states,self.DX,self.possible_positions,self.acceptance_probabilities)
         
         radius_2 = int(particles/np.pi)
         #first get the radius
@@ -103,13 +112,7 @@ class Kawasaki_Discrete:
         
         self.lattice_snaps = dict()
         self.E = self.total_energy()
-        self.possible_positions = [i for i in range(self.initial_bonding_position,self.max_x+1)]
         
-        if probs == None:
-            self.acceptance_probabilities = [1./(1+self.max_x-self.initial_bonding_position)]*(self.max_states)
-        else:
-            self.acceptance_probabilities = probs
-        #self.neighbours = np.array([-1,1])
         
         
     def compare_Boltzmann(self):
@@ -306,7 +309,7 @@ class Kawasaki_Discrete:
         pp_bonds = list(compress(bond_list, pp_interaction_bool))
         #print(self.counter,"pp_bonds",pp_bonds)
         
-        outcome_count = [pp_bonds.count(v) for v in range(self.initial_bonding_position,self.max_x+1)]
+        outcome_count = [pp_bonds.count(v) for v in self.possible_positions]
         #print(self.counter,"oc",outcome_count,"p",[1./(1+self.max_x-self.initial_bonding_position)]*(1+self.max_x-self.initial_bonding_position))
         p = multinomial.pmf(outcome_count, n=len(pp_bonds), p=self.acceptance_probabilities)
         #print(self.counter,"p",p)
@@ -420,19 +423,41 @@ class Kawasaki_Discrete:
             
         
     def FRAP(self,radius):
-        
+        self.bleach_time = self.counter
         self.bleached = set()
         for coord,site in np.ndenumerate(self.lattice):
             
             dist = np.array(coord) - self.L/2
             if np.dot(dist,dist) <= radius**2:
                 self.bleached.add(site)
+        self.lattice_snaps[self.counter] = self.lattice
+        
+    def history(self,bleached=False):
+        print(self.lattice_snaps.keys())
+        fig,axs = plt.subplots(1,len(self.lattice_snaps.keys()))
+        fig.set_size_inches(18.5, 4.5)
+        fig.suptitle('$\\beta$ = ' + str(self.beta)+', L = ' + str(self.L) + ', D = ' + str(self.D) + ', t = ' + str(self.counter), fontsize=16)
+        for i,k in zip(range(0,len(axs)),list(self.lattice_snaps.keys())):
+            #print(i,k)
+            l = self.lattice_snaps[k] #/(4*self.max_x)
+            if bleached and k >= self.bleach_time:
+                print("HERE", k)
+                bl = np.zeros_like(l)
+                for c,v in np.ndenumerate(l):
+                    if v not in self.bleached:
+                        bl[c] = v
+            else:
+                bl = l
+            axs[i].imshow(bl,vmin=0,vmax=1)
+            axs[i].set_axis_off()
         
      
     
     def iterate(self,iterations=0,snaps=0):
-        if snaps != 0:
-            every = int(iterations/snaps)
+        if snaps > 1:
+            every = int(iterations/(snaps-1))
+        elif snaps == 1:
+            every = iterations
         else:
             every = 1
         t = time.time()
@@ -442,7 +467,7 @@ class Kawasaki_Discrete:
         self.E = self.total_energy()
         self.pair_count[self.counter] = len(self.pairs)
         self.results[self.counter] = self.E
-        for iteration in range(0,iterations):
+        for iteration in range(0,iterations+1):
             #print("BEGIN", iteration,self.E)
             self.Kawasaki()
             #print("K", iteration,self.E,self.lattice)
@@ -454,8 +479,10 @@ class Kawasaki_Discrete:
                 t = t2
                 self.results[self.counter] = self.E
                 self.pair_count[self.counter] = self.pairs
-                self.lattice_snaps[self.counter] = self.draw_energies() # self.show(bleached=True,plot=False)
+                self.lattice_snaps[self.counter] = np.copy(self.lattice) #self.draw_energies() # self.show(bleached=True,plot=False)
+                self.energy_snaps[self.counter] = self.draw_energies() # self.show(bleached=True,plot=False)
             self.counter += 1
+        self.counter -= 1
             
             
 
@@ -464,25 +491,27 @@ import matplotlib.pyplot as plt
 import time
 L = 20
 
-a = Kawasaki_Discrete(L=L,dimension=1,beta=1,particles=20,
-                      seed = 4,D=0.1,
-                      max_states=3,max_x = 3,
-                      initial_bonding_position=1,
-                     probs = [1,0,0])
+a = Kawasaki_Discrete(L=L,dimension=2,beta=0.08,particles=200,
+                      seed = 4,D=0,
+                      max_states=6,max_x = 40,
+                      initial_bonding_position=20,
+                     probs = [1,0,0,0,0,0])
 
 
-a.iterate(iterations = 10000,snaps=0)
+a.iterate(iterations = 1000,snaps=3)
 
-#a.FRAP(10)
+a.FRAP(3)
+a.iterate(iterations = 1000,snaps=3)
 #a.iterate(iterations = 10000,snaps=2)
 
-#a.show(bleached=True)
+#a.show(bleached=False)
+a.history(bleached=True)
 #
 #print(a.results)
 
 #plt.plot(a.results.keys(),np.array(list(a.results.values())))
-swaps = np.array([np.sum(list(a.swaps.values())[0:i]) for i in range(0,len(a.swaps.keys()))])
-plt.plot(a.swaps.keys(),swaps)
+#swaps = np.array([np.sum(list(a.swaps.values())[0:i]) for i in range(0,len(a.swaps.keys()))])
+#plt.plot(a.swaps.keys(),swaps)
 #a.compare_Boltzmann()
 
 
