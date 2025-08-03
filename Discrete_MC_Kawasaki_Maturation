@@ -6,6 +6,8 @@ class Kawasaki_Discrete:
     
     def __init__(self,beta=1,dimension=1,particles=2,L=5,seed=0,max_x = 0,D=1,
                 min_x = 0,states=None,probs=None):
+        self.radius = L**2 #big enough so never a prob
+        self.bleached = {}
         self.frame_snaps = dict()
         self.energy_snaps = dict()
         self.bleach_time = 1E9
@@ -446,6 +448,7 @@ class Kawasaki_Discrete:
     def FRAP(self,radius):
         self.bleach_time = self.counter
         self.bleached = set()
+        self.radius = radius
         for coord,site in np.ndenumerate(self.lattice):
             
             dist = np.array(coord) - self.L/2
@@ -455,7 +458,7 @@ class Kawasaki_Discrete:
         self.frame_snaps[self.counter] = {k: np.array(v) for k, v in self.frame.items()}
         
     def history(self,bleached=False):
-        print(self.lattice_snaps.keys())
+        #print(self.lattice_snaps.keys())
         fig,axs = plt.subplots(1,len(self.lattice_snaps.keys()))
         fig.set_size_inches(18.5, 4.5)
         fig.suptitle('$\\beta$ = ' + str(self.beta)+', L = ' + str(self.L) + ', D = ' + str(self.D) + ', t = ' + str(self.counter), fontsize=16)
@@ -477,6 +480,32 @@ class Kawasaki_Discrete:
             axs[i].set_title(k)
             axs[i].matshow(bl,vmin=0,vmax=1)
             axs[i].set_axis_off()
+    def plot_FRAP_recovery(self):
+        #get the amount of fluorescence in the radius
+        #
+        self.flu = dict(zip(list(self.lattice_snaps.keys()),[0 for j in list(self.lattice_snaps.keys())]))
+        for i,k in zip(range(0,len(axs)),list(self.lattice_snaps.keys())):
+            l = self.lattice_snaps[k]
+            for coord,site in np.ndenumerate(l):
+                
+                dist = np.array(coord) - self.L/2
+                if np.dot(dist,dist) <= self.radius**2:
+                    #then it's inside.
+                    
+                    if site != 0: #make sure it's a particle
+                        if k < self.bleach_time:
+                            self.flu[k] += 1
+                        else:
+                            if site not in self.bleached: #check whether it got bleached
+                                self.flu[k] += 1
+                            else:
+                                #print("INSIDE", coord,site)
+                                frame_dist = self.frame_snaps[k][site] - self.frame_snaps[self.bleach_time][site]
+                                if np.dot(frame_dist,frame_dist) != 0:
+                                    self.flu[k] += 1
+                    
+        plt.plot(self.flu.keys(),self.flu.values())
+                
         
      
     
@@ -521,32 +550,35 @@ class Kawasaki_Discrete:
 import numpy as np
 import matplotlib.pyplot as plt
 import time
-L = 10
+L = 30
 
-a = Kawasaki_Discrete(L=L,dimension=1,beta=1,particles=2,
-                      seed = 4,D=1,
-                      states=2,min_x=1,max_x = 2,
+a = Kawasaki_Discrete(L=L,dimension=2,beta=1,particles=500,
+                      seed = 1,D=1,
+                      states=1,min_x=1,max_x = 2,
                      probs = 'first')
 #print(a.possible_positions)
 #print(a.acceptance_probabilities)
 #print(a.position_energy_map)
+a.iterate(iterations = 100000,snaps=5)
+a.FRAP(10) 
+a.iterate(iterations = 100000,snaps=5)
+#a.iterate(iterations = 100,snaps=5)
+#a.iterate(iterations = 1000,snaps=5)
 
-a.iterate(iterations = 10000,snaps=0)
-
-#a.FRAP(10)
 #a.iterate(iterations = 1000,snaps=5)
 #a.FRAP(3)
 #a.iterate(iterations = 1000,snaps=3)
 #a.iterate(iterations = 10000,snaps=2)
 
-#a.show(bleached=False)
-#a.history(bleached=True)
+#a.show(bleached=True)
+#a.history(bleached=False)
 #
 #print(a.results)
+a.plot_FRAP_recovery()
 
 #plt.plot(a.results.keys(),np.array(list(a.results.values())))
 #swaps = np.array([np.sum(list(a.swaps.values())[0:i]) for i in range(0,len(a.swaps.keys()))])
 #plt.plot(a.swaps.keys(),swaps)
-a.compare_Boltzmann()
+#a.compare_Boltzmann()
 
 
