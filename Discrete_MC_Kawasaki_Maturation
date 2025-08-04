@@ -1,6 +1,7 @@
 import math
 from itertools import compress
 from scipy.stats import multinomial
+import numpy as np
 class Kawasaki_Discrete:
    
     
@@ -8,6 +9,8 @@ class Kawasaki_Discrete:
                 min_x = 0,states=None,probs=None):
         self.radius = L**2 #big enough so never a prob
         self.bleached = {}
+        self.bleach_times = []
+        self.bleached=dict()
         self.frame_snaps = dict()
         self.energy_snaps = dict()
         self.bleach_time = 1E9
@@ -120,8 +123,8 @@ class Kawasaki_Discrete:
         pairs = self.get_pairs()
         for pair in pairs:
             p1,p2 = pair
-            self.position[p1,p2] = 0
-            self.position[p2,p1] = 0
+            self.position[p1,p2] = 0 #self.max_x
+            self.position[p2,p1] = 0 #self.max_x 
         self.results = dict()
         self.pair_count = dict()
         self.D = D
@@ -133,7 +136,7 @@ class Kawasaki_Discrete:
         
         
     def compare_Boltzmann(self):
-        
+        import matplotlib.pyplot as plt
         #two situations - one where bond starts at 1 and one where starts at 0
         
         energies = list(set(self.results.values()))
@@ -313,8 +316,8 @@ class Kawasaki_Discrete:
         site2_env = [self.lattice[tuple((site2-self.neighbours[n_id])%self.L)] for n_id in self.neighbour_ids[1:]]
       
    
-        site1_bonds = [self.position[self.lattice[site1],p] for p in site1_env]
-        site2_bonds = [self.position[self.lattice[site2],p] for p in site2_env]
+        site1_bonds = [1*int(self.position[self.lattice[site1],p]) for p in site1_env]
+        site2_bonds = [1*int(self.position[self.lattice[site2],p]) for p in site2_env]
         
         pp_interaction = [np.sign(self.lattice[site1])*np.sign(p) for p in site1_env] + [np.sign(self.lattice[site2])*np.sign(p) for p in site2_env]
         pp_interaction_bool = [bool(p) for p in pp_interaction]
@@ -324,7 +327,7 @@ class Kawasaki_Discrete:
         
         
         pp_bonds = list(compress(bond_list, pp_interaction_bool))
-       
+        #print("GIVES", self.counter,pp_bonds)
         
         outcome_count = [pp_bonds.count(v) for v in self.possible_positions]
         
@@ -333,8 +336,9 @@ class Kawasaki_Discrete:
         if p < np.random.rand():
             return()
         
-    
-        old_positions = np.copy(self.position)
+        #the positions that will be altered: site1:site1_env and 
+        
+        #old_positions = np.copy(self.position)
         
       
         
@@ -380,7 +384,7 @@ class Kawasaki_Discrete:
         
         if np.random.rand() < min(np.exp(-self.beta*(E_after - self.E)),1):
             
-          
+            #swap occurs
             self.E = E_after
             self.swaps[self.counter] = 1
             
@@ -406,6 +410,7 @@ class Kawasaki_Discrete:
             
             if not np.array_equal(adjacent_coordinate,PBC_adjacent_coordinate):
                 
+                
                 self.frame[p1] += direction
                 #print("HERE",adjacent_coordinate,PBC_adjacent_coordinate,direction,self.frame)
                 if p2 != 0:
@@ -422,7 +427,20 @@ class Kawasaki_Discrete:
         self.lattice[tuple(site1)] = self.lattice[tuple(site2)]
         self.lattice[tuple(site2)] = temp
         
-        self.position = np.copy(old_positions)
+        #print("BEFORE", self.position)
+        
+        for p,old_p in zip(site1_env,site1_bonds):
+            self.position[self.lattice[site1],p] = int(old_p)
+            self.position[p,self.lattice[site1]] = int(old_p)
+        for p,old_p in zip(site2_env,site2_bonds):
+            self.position[self.lattice[site2],p] = int(old_p)
+            self.position[p,self.lattice[site2]] = int(old_p)
+            
+        #print("NOW", self.position)
+       # site1_bonds = [np.copy(self.position[self.lattice[site1],p]) for p in site1_env]
+        #site2_bonds = [np.copy(self.position[self.lattice[site2],p]) for p in site2_env]
+        
+        #self.position = old_positions
         
     def show(self,bleached=False,plot=True):
         if not bleached:
@@ -432,7 +450,7 @@ class Kawasaki_Discrete:
             else:
                 return(self.lattice != 0)
         else:
-            #print("SHOWING BLEACHED")
+            
             bl = np.zeros_like(self.lattice)
             for c,v in np.ndenumerate(self.lattice):
                 if v not in self.bleached:
@@ -446,23 +464,24 @@ class Kawasaki_Discrete:
             
         
     def FRAP(self,radius):
-        self.bleach_time = self.counter
-        self.bleached = set()
+        bleach_time = self.counter
+        self.bleach_times.append(bleach_time)
+        self.bleached[bleach_time] = set()
         self.radius = radius
         for coord,site in np.ndenumerate(self.lattice):
             
             dist = np.array(coord) - self.L/2
             if np.dot(dist,dist) <= radius**2:
-                self.bleached.add(site)
+                self.bleached[bleach_time].add(site)
         self.lattice_snaps[self.counter] = self.lattice
         self.frame_snaps[self.counter] = {k: np.array(v) for k, v in self.frame.items()}
         
     def history(self,bleached=False):
         #print(self.lattice_snaps.keys())
-        fig,axs = plt.subplots(1,len(self.lattice_snaps.keys()))
-        fig.set_size_inches(18.5, 4.5)
-        fig.suptitle('$\\beta$ = ' + str(self.beta)+', L = ' + str(self.L) + ', D = ' + str(self.D) + ', t = ' + str(self.counter), fontsize=16)
-        for i,k in zip(range(0,len(axs)),list(self.lattice_snaps.keys())):
+        fig,axs = plt.subplots(2,len(self.lattice_snaps.keys()))
+        fig.set_size_inches(20.5, 5.5)
+        fig.suptitle('$\\beta$ = ' + str(self.beta)+', L = ' + str(self.L) + ', D = ' + str(self.D) + ', t = ' + str(self.counter) + ', $J_{min} = $' + str(self.initial_bonding_position) + ', $J_{max} = $' + str(self.max_x)+', states = ' + str(self.max_states), fontsize=16)
+        for i,k in zip(range(0,len(axs[0])),list(self.lattice_snaps.keys())):
             #print(i,k)
             l = self.lattice_snaps[k] #/(4*self.max_x)
             if bleached and k >= self.bleach_time:
@@ -477,34 +496,40 @@ class Kawasaki_Discrete:
                             bl[c] = v   
             else:
                 bl = l
-            axs[i].set_title(k)
-            axs[i].matshow(bl,vmin=0,vmax=1)
-            axs[i].set_axis_off()
+            axs[0][i].set_title(k)
+            axs[0][i].matshow(-bl,vmin=-1,vmax=0,cmap='Greys')
+            axs[1][i].imshow(-self.energy_snaps[k]/(4*self.max_x),vmin=0,vmax=1)
+            axs[0][i].set_axis_off()
+            axs[1][i].set_axis_off()
     def plot_FRAP_recovery(self):
         #get the amount of fluorescence in the radius
         #
-        self.flu = dict(zip(list(self.lattice_snaps.keys()),[0 for j in list(self.lattice_snaps.keys())]))
-        for i,k in zip(range(0,len(axs)),list(self.lattice_snaps.keys())):
-            l = self.lattice_snaps[k]
-            for coord,site in np.ndenumerate(l):
-                
-                dist = np.array(coord) - self.L/2
-                if np.dot(dist,dist) <= self.radius**2:
-                    #then it's inside.
-                    
-                    if site != 0: #make sure it's a particle
-                        if k < self.bleach_time:
-                            self.flu[k] += 1
-                        else:
-                            if site not in self.bleached: #check whether it got bleached
+        self.flu_data = dict()
+        for bleach_time in self.bleach_times:
+            self.flu = dict(zip(list(self.lattice_snaps.keys()),[0 for j in list(self.lattice_snaps.keys())]))
+            for k in list(self.lattice_snaps.keys()):
+                l = self.lattice_snaps[k]
+                for coord,site in np.ndenumerate(l):
+
+                    dist = np.array(coord) - self.L/2
+                    if np.dot(dist,dist) <= self.radius**2:
+                        #then it's inside.
+
+                        if site != 0: #make sure it's a particle
+                            if k < bleach_time:
                                 self.flu[k] += 1
                             else:
-                                #print("INSIDE", coord,site)
-                                frame_dist = self.frame_snaps[k][site] - self.frame_snaps[self.bleach_time][site]
-                                if np.dot(frame_dist,frame_dist) != 0:
+                                if site not in self.bleached[bleach_time]: #check whether it got bleached
                                     self.flu[k] += 1
-                    
-        plt.plot(self.flu.keys(),self.flu.values())
+                                else:
+                                    #print("INSIDE", coord,site)
+                                    frame_dist = self.frame_snaps[k][site] - self.frame_snaps[bleach_time][site]
+                                    if np.dot(frame_dist,frame_dist) != 0:
+                                        self.flu[k] += 1
+            
+            #print(self.flu)
+            self.flu_data[bleach_time] = self.flu
+        return(self.flu_data)
                 
         
      
@@ -516,7 +541,7 @@ class Kawasaki_Discrete:
             every = iterations
         else:
             every = 1
-        t = time.time()
+        
         
         self.pairs = self.get_pairs()
         #print("HERE",self.pairs)
@@ -526,13 +551,11 @@ class Kawasaki_Discrete:
         for iteration in range(0,iterations+1):
             
             if iteration%every==0:
-                #t2 = time.time()
-                #print(self.counter,t2 - t)
-                #t = t2
+                
                 self.results[self.counter] = self.E
                 self.pair_count[self.counter] = self.pairs
-                self.lattice_snaps[self.counter] = np.copy(self.lattice) #self.draw_energies() # self.show(bleached=True,plot=False)
-                self.energy_snaps[self.counter] = self.draw_energies() # self.show(bleached=True,plot=False)
+                self.lattice_snaps[self.counter] = np.copy(self.lattice) 
+                self.energy_snaps[self.counter] = self.draw_energies()
                 self.frame_snaps[self.counter] = {k: np.array(v) for k, v in self.frame.items()}
             
             self.Kawasaki()
@@ -544,24 +567,28 @@ class Kawasaki_Discrete:
                 return()
             self.counter += 1
         #self.counter -= 1
-            
-            
 
+          
+from Condensate_Maturation_Orv import *
 import numpy as np
-import matplotlib.pyplot as plt
-import time
-L = 30
+#import matplotlib.pyplot as plt
+L = 10
 
-a = Kawasaki_Discrete(L=L,dimension=2,beta=1,particles=500,
+a = Kawasaki_Discrete(L=L,dimension=1,beta=1,particles=2,
                       seed = 1,D=1,
-                      states=1,min_x=1,max_x = 2,
+                      states=4,min_x=1.5,max_x = 4.5,
                      probs = 'first')
-#print(a.possible_positions)
-#print(a.acceptance_probabilities)
-#print(a.position_energy_map)
-a.iterate(iterations = 100000,snaps=5)
-a.FRAP(10) 
-a.iterate(iterations = 100000,snaps=5)
+import time
+#equilibrate
+a.beta = 1
+t = time.time()
+a.iterate(iterations = 1000,snaps=0)
+print(time.time() - t)
+#a.beta = 1
+#a.iterate(iterations = 1000000,snaps=50)
+#a.FRAP(100)
+#print("THERE")
+#a.iterate(iterations = 1000000,snaps=50)
 #a.iterate(iterations = 100,snaps=5)
 #a.iterate(iterations = 1000,snaps=5)
 
@@ -574,11 +601,16 @@ a.iterate(iterations = 100000,snaps=5)
 #a.history(bleached=False)
 #
 #print(a.results)
-a.plot_FRAP_recovery()
-
+#data = a.plot_FRAP_recovery()
+#print(data)
+#print(a.results)
+#a.history(bleached=True)
 #plt.plot(a.results.keys(),np.array(list(a.results.values())))
 #swaps = np.array([np.sum(list(a.swaps.values())[0:i]) for i in range(0,len(a.swaps.keys()))])
 #plt.plot(a.swaps.keys(),swaps)
-#a.compare_Boltzmann()
+a.compare_Boltzmann()
+
+
+
 
 
