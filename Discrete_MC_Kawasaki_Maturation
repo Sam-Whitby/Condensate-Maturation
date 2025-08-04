@@ -7,6 +7,7 @@ class Kawasaki_Discrete:
     
     def __init__(self,beta=1,dimension=1,particles=2,L=5,seed=0,max_x = 0,D=1,
                 min_x = 0,states=None,probs=None):
+        self.directions_dict = dict()
         self.radius = L**2 #big enough so never a prob
         self.bleached = {}
         self.bleach_times = []
@@ -141,7 +142,7 @@ class Kawasaki_Discrete:
         
         energies = list(set(self.results.values()))
         
-        occurences = [(i,list(self.results.values()).count(i)) for i in energies]
+        occurences = [(i,energies.count(i)) for i in energies]
         
 
         sim_results = dict()
@@ -281,7 +282,11 @@ class Kawasaki_Discrete:
         
         
     def Kawasaki(self):
-        #print("E", self.counter,self.E)
+        
+        
+        #a big speed up perhaps? Not really
+        
+        
         self.swaps[self.counter] = 0
         
         #get old stuff copied
@@ -293,7 +298,7 @@ class Kawasaki_Discrete:
         
         
         
-        direction = self.neighbours[direction_id]
+        
         
       
         
@@ -302,18 +307,41 @@ class Kawasaki_Discrete:
         
         site1 = tuple(self.particle_locations[particle] + np.array([0]))
         
-        adjacent_coordinate = site1 + direction
-        PBC_adjacent_coordinate = adjacent_coordinate%self.L
+        if self.local:
+            direction = self.neighbours[direction_id]
+            adjacent_coordinate = site1 + direction
+            PBC_adjacent_coordinate = adjacent_coordinate%self.L
+            site2 = tuple(PBC_adjacent_coordinate)
+        else:
+            #make sure big enough
+            if self.L -2 <= 2:
+                return()
+            direction = np.random.randint(2,self.L-1,size=self.dimensions)
+            adjacent_coordinate = site1 + direction
+            PBC_adjacent_coordinate = adjacent_coordinate%self.L
+            site2 = tuple(PBC_adjacent_coordinate)
+        self.directions_dict[self.counter] = direction
 
-        site2 = tuple(PBC_adjacent_coordinate)
+        #print("S1S2", site1,site2,direction)
+        
+        if self.mode == "ps":
+            #then since we only allow particle-solvent swaps, we need to make sure site 2 is solvent
+            #note this would get FRAP wrong but might speed up initial condensation
+            if self.lattice[site2] != 0:
+                return()
         
         #determine whether it's particle-particle interaction
         
         
         
-
-        site1_env = [self.lattice[tuple((site1+self.neighbours[n_id])%self.L)] for n_id in self.neighbour_ids[1:]]
-        site2_env = [self.lattice[tuple((site2-self.neighbours[n_id])%self.L)] for n_id in self.neighbour_ids[1:]]
+        if self.local:
+            site1_env = [self.lattice[tuple((site1+self.neighbours[n_id])%self.L)] for n_id in self.neighbour_ids[1:]]
+            site2_env = [self.lattice[tuple((site2-self.neighbours[n_id])%self.L)] for n_id in self.neighbour_ids[1:]]
+        else:
+            #consider all bonds
+            site1_env = [self.lattice[tuple((site1+self.neighbours[n_id])%self.L)] for n_id in self.neighbour_ids[0:]]
+            site2_env = [self.lattice[tuple((site2-self.neighbours[n_id])%self.L)] for n_id in self.neighbour_ids[0:]]
+            
       
    
         site1_bonds = [1*int(self.position[self.lattice[site1],p]) for p in site1_env]
@@ -378,7 +406,9 @@ class Kawasaki_Discrete:
         self.lattice[tuple(site1)] = self.lattice[tuple(site2)]
         self.lattice[tuple(site2)] = temp
         
-        E_after = (self.E+dE) 
+        E_after = (self.E+dE)
+        
+        
        
       
         
@@ -407,14 +437,14 @@ class Kawasaki_Discrete:
             self.particle_locations[p1] = site2
             
             #lastly update the frame
-            
-            if not np.array_equal(adjacent_coordinate,PBC_adjacent_coordinate):
-                
-                
-                self.frame[p1] += direction
-                #print("HERE",adjacent_coordinate,PBC_adjacent_coordinate,direction,self.frame)
-                if p2 != 0:
-                    self.frame[p2] -= direction
+            if self.mode != "ps" and self.local:
+                if not np.array_equal(adjacent_coordinate,PBC_adjacent_coordinate):
+
+
+                    self.frame[p1] += direction
+                    #print("HERE",adjacent_coordinate,PBC_adjacent_coordinate,direction,self.frame)
+                    if p2 != 0:
+                        self.frame[p2] -= direction
                     
                 
                 
@@ -534,7 +564,7 @@ class Kawasaki_Discrete:
         
      
     
-    def iterate(self,iterations=0,snaps=0):
+    def iterate(self,iterations=0,snaps=0,mode=None,anneal=False,local=True):
         if snaps > 1:
             every = int(iterations/(snaps-1))
         elif snaps == 1:
@@ -542,13 +572,20 @@ class Kawasaki_Discrete:
         else:
             every = 1
         
-        
+        self.mode = mode
         self.pairs = self.get_pairs()
+        
         #print("HERE",self.pairs)
         self.E = self.total_energy()
         self.pair_count[self.counter] = len(self.pairs)
         self.results[self.counter] = self.E
         for iteration in range(0,iterations+1):
+            if anneal:
+                self.beta = iteration/iterations
+            if not local:
+                self.local = np.random.choice([True,False])
+            else:
+                self.local = True
             
             if iteration%every==0:
                 
@@ -567,23 +604,33 @@ class Kawasaki_Discrete:
                 return()
             self.counter += 1
         #self.counter -= 1
-
-          
+            
+            
 from Condensate_Maturation_Orv import *
 import numpy as np
 #import matplotlib.pyplot as plt
-L = 10
+L = 50
 
-a = Kawasaki_Discrete(L=L,dimension=1,beta=1,particles=2,
-                      seed = 1,D=1,
-                      states=4,min_x=1.5,max_x = 4.5,
+a = Kawasaki_Discrete(L=L,dimension=2,beta=1,particles=1000,
+                      seed = 1,D=0,
+                      states=1,min_x=2.0,max_x = 4.2,
                      probs = 'first')
 import time
 #equilibrate
-a.beta = 1
 t = time.time()
-a.iterate(iterations = 1000,snaps=0)
-print(time.time() - t)
+a.beta = 1
+a.iterate(iterations = 200000,snaps=10,mode='ps',local=False)
+print("DONE1",a.mode,time.time() - t)
+#a.beta = 0
+a.beta = 0
+a.iterate(iterations = 200000,snaps=10,local=False,mode='ps')
+print("DONE2",a.mode,time.time() - t)
+a.beta = 1
+a.iterate(iterations = 200000,snaps=10,local=False,mode='ps')
+print("DONE3",a.mode,time.time() - t)
+#a.iterate(iterations = 10,snaps=5)
+#print("DONE2",a.mode)
+
 #a.beta = 1
 #a.iterate(iterations = 1000000,snaps=50)
 #a.FRAP(100)
@@ -608,9 +655,6 @@ print(time.time() - t)
 #plt.plot(a.results.keys(),np.array(list(a.results.values())))
 #swaps = np.array([np.sum(list(a.swaps.values())[0:i]) for i in range(0,len(a.swaps.keys()))])
 #plt.plot(a.swaps.keys(),swaps)
-a.compare_Boltzmann()
-
-
-
+#a.compare_Boltzmann()
 
 
