@@ -1,689 +1,1522 @@
-import math
-from itertools import compress
-from scipy.stats import multinomial
 import numpy as np
-class Kawasaki_Discrete:
-   
-    
-    def __init__(self,beta=1,dimension=1,particles=2,L=5,seed=0,max_x = 0,D=1,
-                min_x = 0,states=None,probs=None,initial_state='gas'):
+import networkx as nx
+import itertools
+#import time
+
+class Lattice_VMMC_Simplified:
+    def __init__(self,d=100000,L=4,seed=False,beta=1,shape="spiral",every = 1,c_block_side_length = None,solvent_fraction=0,solvent_strength_fraction=0,rmax=0,box=False,origin = (0,0)):
+        self.rmax = rmax
         
+        #self.test_data = dict()
+        self.complexes_removed = dict()
+        self.delete = False
+        self.shape = shape
         
-        self.initial_state = initial_state
-        self.directions_dict = dict()
-        self.radius = L**2 #big enough so never a prob
-        self.bleached = {}
-        self.bleach_times = []
-        self.bleached=dict()
-        self.frame_snaps = dict()
-        self.energy_snaps = dict()
-        self.bleach_time = 1E9
-        self.dimensions = dimension
-        np.random.seed(seed)
-        self.max_x = max_x
-        self.beta= beta
-        self.L = L
+        self.beta_values = dict()
+        #also don't need to produce a lattice here
+        self.viable_dict = dict()
+        self.recognisable = False
+        self.move_outcome = dict()
+        
+        self.time = dict()
+        self.global_time = 0
         self.counter = 0
-        self.initial_bonding_position = min_x
-        self.COM = (self.L/2 + np.array([0,0]))%self.L
-        self.rolls = {0:0,1:0}
-        self.first_FRAP = True
-        
-        #we have x positions. Initial, final and the rest equally distributed.
-        #solution: make a dictionary that maps the integers to (linearly distb) states
-        self.max_states = states
-        if self.max_states == 1:
-            div = 1
+        self.time[self.counter] = self.global_time
+        if seed != False:
+            np.random.seed(seed)
+            
+        self.d = d
+   
+        if box != False:
+            if self.d%2 != 0:
+                print("Move to even lattice")
+                return()
+            else:
+             
+
+                mid = int(self.d/2)
+
+                self.box = [(mid-1,mid),
+                    (mid,mid+1),
+                    (mid+1,mid),
+                    (mid,mid-1)]
+
         else:
-            div = 1./(self.max_states-1)
-        state_J = [self.initial_bonding_position + i*(self.max_x - self.initial_bonding_position)*div for i in range(0,self.max_states)]
-        self.position_energy_map = dict(zip([i for i in range(0,self.max_states)],state_J))
+            self.box = None
+            
+        self.overlap_penalty = 1E9
+        self.backbone_strength = -1 * self.overlap_penalty
+        
+        self.set_beta(beta)
+        
+        self.L = L
+
+        self.origin = np.array(origin)
+        
+            
+        self.wids = np.arange(0,1000000,1)
+        
+        if shape == "spiral":
+            coordinates = self.draw_spiral()
+            i = 1
+            for c in coordinates:
+                self.viable_dict[i] = (self.origin[0] + c[0],self.origin[1] + c[1])
+         
+                i += 1
+        elif shape == "Hilbert":
+            coordinates = self.draw_Hilbert()
+            #can stick together 
+            i = 1
+            for c in coordinates:
+                self.viable_dict[i] = (self.origin[0] + c[0],self.origin[1] + c[1])
+         
+                i += 1
+        elif shape == "complex":
+            
+            t = np.arange(0,1000000,1)
+
+            
+            self.wids = np.sign(t)*((t-1)%16 + 1)
+
+            self.structure = np.zeros((4,4),dtype=int)
+            self.structure[2,1] = 11
+            self.structure[2,2] = 12
+            self.structure[3,2] = 13
+            self.structure[3,3] = 14
+
+            self.structure[1,0] = 21
+            self.structure[2,0] = 22
+            self.structure[3,0] = 23
+            self.structure[3,1] = 24
+
+            self.structure[0,2] = 31
+            self.structure[0,3] = 32
+            self.structure[1,3] = 33
+            self.structure[2,3] = 34
+
+            self.structure[0,0] = 41
+            self.structure[0,1] = 42
+            self.structure[1,1] = 43
+            self.structure[1,2] = 44
+  
+            self.id_to_number = {11:1,12:2,13:3,14:4,
+                           21:5,22:6,23:7,24:8,
+                           31:9,32:10,33:11,34:12,
+                           41:13,42:14,43:15,44:16}
+            self.repeat_length = len(self.id_to_number)
+            x,y = np.where(self.structure!=0)
+        
+            self.c_block_side_length = c_block_side_length #the number of complexes per side of the block we are creating
+            for i,j in zip(x,y):
+                counter = 0
+                for nx in range(0,self.c_block_side_length):
+                    for ny in range(0,self.c_block_side_length):
+                        self.viable_dict[self.id_to_number[self.structure[i,j]] + counter] =  (self.origin[0] + i+nx*4,self.origin[1] + j+ny*4)
+
+                #        self.viable_dict[[i+nx*4,j+ny*4] = id_to_number[structure[i,j]] + counter
+                        
+                        counter += 16
+            
+            self.L = len(self.viable_dict)
+            
+    
+        else:
+            
+            for i in range(1,self.L+1):
+            #fold it into a single lattice site so not extended over many (will give frustrated interactions)
+                if int((i-1)/self.d)%2 == 0:
+                    self.viable_dict[i] = (self.origin[0] + int((i-1)/self.d),self.origin[1] + (i-1)%self.d)
+                   
+
+        J = {0: self.overlap_penalty*np.ones((self.L+1,self.L+1)),
+             1: self.backbone_strength*(np.eye(self.L+1, k=1) + np.eye(self.L+1, k=-1)),
+            2: (self.backbone_strength)*(np.eye(self.L+1, k=1) + np.eye(self.L+1, k=-1)),
+            4: np.zeros((self.L+1,self.L+1)),
+                 5: np.zeros((self.L+1,self.L+1)),
+                 6: np.zeros((self.L+1,self.L+1))}
+        
+        self.J = {True:J,False:J}
         
         
+        #simulation specific parameters (can move some to a list of constants)
+        self.NNdirections = [(0,1),(0,-1),(1,0),(-1,0),(1,1),(-1,1),(-1,-1),(1,-1)]
+        self.NNdirections = [np.array(direction) for direction in self.NNdirections]
+        
+        
+        self.KNNdirections = np.copy(self.NNdirections)
+
+        self.locations_dict = {v: k for k, v in self.viable_dict.items()}
+        #encode the bonding here for a square
+        
+        self.energies = dict()
+        self.config_ids = dict()
+        self.positions = dict()
+        self.successful_moves = []
+        
+        self.C_size = dict()
+        self.ncomplexes = dict()
        
-        self.possible_positions = list(self.position_energy_map.keys())
         
-       # print(self.position_energy_map,self.possible_positions)
-        
-        if probs == "uniform":
-            self.acceptance_probabilities = [1./(self.max_states)]*self.max_states
-        elif probs == "first":
-            self.acceptance_probabilities = [1] + [0]*(self.max_states-1)
-        
+    def draw_spiral(self):
+        #for L being a square number, draw a spiral of side length root(L)
+
+        #simpler
+        s = 0
+        steps = [np.array([1,0]),np.array([0,1]),np.array([-1,0]),np.array([0,-1])]
+        rootL = int(np.sqrt(self.L))
+        position = np.array([0,0])
+        step = np.array([1,0])
+        coordinates = [(rootL,0),(rootL-1,rootL),(-1,rootL-1)]
+        while tuple(position) != coordinates[-2]:
+
+            coordinates.append((position[0],position[1]))
+
+            position += step
+
+            if tuple(position) in coordinates:
+                s = (s + 1)%4
+                position -= step
+                step = steps[s]
+        return([c for c in filter(None,[coordinates[i] if coordinates[i] != coordinates[i-1] else None for i in range(3,len(coordinates)-1)])])
+    def draw_Hilbert(self):
+        n = 6 #probably high enough
+        curve = [np.array([0,0])]
+        direction = np.array([1,0]) #the direction turtle is pointing
+        L = np.array([[0,-1],[1,0]])
+        R = np.array([[0,1],[-1,0]])
+        rule_A = 'LBFRAFARFBL' 
+        rule_B = 'RAFLBFBLFAR'
        
-        radius_2 = int(particles/np.pi)
-        #first get the radius
-        p = 1
+        expanded_rule = str(rule_A)
+        for i in range(0,n):
+            expanded_rule = expanded_rule.translate(str.maketrans({'A': rule_A, 'B': rule_B}))
+            
+        for r in expanded_rule:
+
+            if r == "L":
+                direction = np.array([-direction[1],direction[0]])
+            elif r == "R":
+                direction =  np.array([direction[1],-direction[0]])
+
+            elif r == "F":
+                curve.append(curve[-1] + direction)
+            if len(curve) > self.L:
+                break
+        return([(c[0],c[1]) for c in curve[0:self.L]])
+    
+    
+        
+        
+    
+        
+    def set_initial_config(self,straight=1,diag=1,stretch_penalty=1,random=False,config_id=0,self_repulsion = 1,noise=0,max_complexes = 10,gradient = True):
+        self.stretch_penalty = stretch_penalty
+        self.self_repulsion = self_repulsion
+        #self.group_test = group_test
+        self.straight = straight
+        self.diag = diag
+        self.gradient = gradient
+        
+        others = [  (0,-2),   (0,2),  (-2,0),        (2,0),(2,1),(1,2),(-1,2),(-2,2),(2,2),
+                             (-2,1),(-2,-1),     (-2,-2),
+                             (-1,-2),(1,-2),         (2,-2),
+                             (2,-1),
+                             (0,0)]
+
+        self.NNdirections += others
+        
+        self.NNdirections = [np.array(direction) for direction in self.NNdirections]
+        
+        if self.box != None:
+            self.all_box_neighbours = set()
+            for pos in self.box:
+                pos_neighbours = set([tuple((np.array(pos) + np.array(NN))%self.d) for NN in self.NNdirections[0:-1]])
+                self.all_box_neighbours.update(pos_neighbours)
+            self.all_box_neighbours -= set(self.box)
+            #box neighbours contains everything that needs resetting when generating a new structure
+
+        
+
+        if self.shape == "complex":
+            
+            self.protein_types = 16
+            J_complex = np.zeros((17,17),dtype=int)
+            J_complex_off = np.zeros((17,17),dtype=int)
+            
+            
+            
+            N = 1 #self.c_block_side_length
+          
+            for site_id1 in list(self.id_to_number.keys()):
+                for site_id2 in list(self.id_to_number.keys()):
+                    if abs(site_id2 - site_id1) < 4: #then will repel if different complexes 
+                        J_complex_off[self.id_to_number[site_id1],self.id_to_number[site_id2]] = 6
+                        J_complex_off[self.id_to_number[site_id2],self.id_to_number[site_id1]] = 6
+
+                    if site_id1 == site_id2: #site doesn't bind to itself
+                        continue
+
+                    if abs(site_id2 - site_id1) == 1: #backbone
+
+                        J_complex[self.id_to_number[site_id1],self.id_to_number[site_id2]] = 4
+                        J_complex[self.id_to_number[site_id2],self.id_to_number[site_id1]] = 4
+                    else:
+                        c1 = np.where(self.structure == site_id1)
+                        c2 = np.where(self.structure == site_id2)
+
+                        if (c1[0] - c2[0])**2 + (c1[1] - c2[1])**2 == 1: #then adjacent
+
+                            J_complex[self.id_to_number[site_id1],self.id_to_number[site_id2]] = 1
+                            J_complex[self.id_to_number[site_id2],self.id_to_number[site_id1]] = 1
+                        elif (c1[0] - c2[0])**2 + (c1[1] - c2[1])**2 == 2 and (np.floor(site_id2/10) != np.floor(site_id1/10)): #then diagonal and not part of the same polymer
+
+                            J_complex[self.id_to_number[site_id1],self.id_to_number[site_id2]] = 2
+                            J_complex[self.id_to_number[site_id2],self.id_to_number[site_id1]] = 2
+                        else: #not bonding
+                            J_complex[self.id_to_number[site_id1],self.id_to_number[site_id2]] = -1
+                            J_complex[self.id_to_number[site_id2],self.id_to_number[site_id1]] = -1
+
+            
+            J_complex_off += np.multiply(J_complex_off==0,J_complex)
+            
+            
+            self.J = {True:dict(),
+                          False:dict()} #True false relate to whether on or off
+            
+            l = 17
+            
+            self.J[True][0] = self.overlap_penalty*np.ones((l,l))
+            self.J[False][0] = self.overlap_penalty*np.ones((l,l))
+            
+            self.J[True][1] = np.multiply(self.straight*(J_complex == 1) - (J_complex==4)*self.overlap_penalty,np.sign(J_complex))
+                        
+            self.J[False][1] = np.multiply(self.straight*(J_complex_off == 1),np.sign(J_complex_off)) + -self.straight*(J_complex_off == 6)
+            
+            self.J[True][2] = np.multiply(self.diag*(J_complex == 2) - (J_complex==4)*self.overlap_penalty,np.sign(J_complex))
+                        
+            self.J[False][2] = np.multiply(self.diag*(J_complex_off == 2),np.sign(J_complex_off)) + -self.straight*(J_complex_off == 6)
+            
+            self.J[False][4] = np.zeros((l,l)) - self.diag*(J_complex_off == 6)           
+            self.J[True][4] = np.zeros((l,l))
+            
+            self.J[False][5] = np.zeros((l,l))# - self.diag*(J_complex_off == 6)
+            self.J[True][5] = np.zeros((l,l))
+           
+            self.J[True][6] = np.zeros((l,l))
+            self.J[False][6] = np.zeros((l,l))
+            
+            self.max_polymer_id = len(self.J[1][0])
+ 
+        viable = self.viable_dict.values()
+        
+        
+        if random:
+            
+            r = straight*np.random.randn(*self.J[True][1].shape)
+            r = (r + r.T)/2
+            np.fill_diagonal(r,0)
+            r = np.multiply(1 - (np.eye(self.L+1, k=1) + np.eye(self.L+1, k=-1)),r)
+            
+            
+            r2 = straight*np.random.randn(*self.J[True][2].shape)
+            r2 = (r2 + r2.T)/2
+            np.fill_diagonal(r2,0)
+            r2 = np.multiply(1 - (np.eye(self.L+1, k=1) + np.eye(self.L+1, k=-1)),r2)
+            
+            r4 = straight*np.random.randn(*self.J[True][2].shape)
+            r4 = (r4 + r4.T)/2
+            np.fill_diagonal(r4,0)
+            r4 = np.multiply(1 - (np.eye(self.L+1, k=1) + np.eye(self.L+1, k=-1)),r4)
+            
+            r5 = straight*np.random.randn(*self.J[True][2].shape)
+            r5 = (r5 + r5.T)/2
+            np.fill_diagonal(r5,0)
+            r5 = np.multiply(1 - (np.eye(self.L+1, k=1) + np.eye(self.L+1, k=-1)),r5)
+            
+            self.J[True][1] += r
+            self.J[True][2] += r2
+            self.J[True][4] += r4
+            self.J[True][5] += r5
+            
+            
+            self.J[False][1] += r
+            self.J[False][2] += r2
+            self.J[False][4] += r4
+            self.J[False][5] += r5
+            
+   
+        
+      
+
+        self.make_groups()
         
          
+        if self.box:
             
-        
-        self.particles = particles
-        #self.FRAP = False
-        self.particle_locations = dict()
-        
-        
-        if self.dimensions == 1:
-            self.lattice = np.zeros(self.L,dtype=int)
-            self.neighbours = [np.array([-1]),np.array([1])]
-            self.neighbour_ids = np.array([0,1])
-            
-            p = 1  
-            while p <= particles:
-
-                self.lattice[p-1] = p
-                self.particle_locations[p] = p-1
-                p += 1
+            self.links = 0*np.identity(self.L+1,dtype=int) #this is the linking of the box particle at the last position
+            #append box to each J. It will be located by -1 as it's the last array element
+            for i in self.J.keys():
+                if i == 0:
                     
                     
-        elif self.dimensions == 2:
-            self.lattice = np.zeros((self.L,self.L),dtype=int)
-            self.neighbours = [np.array([-1,0]),
-                           np.array([1,0]),
-                           np.array([0,1]),
-                           np.array([0,-1])]
-            self.neighbour_ids = np.array([0,1,2,3])
-            
-            p = 1
-            if initial_state != 'gas':
-                for coord,site in np.ndenumerate(self.lattice):
-
-                    dist = np.array(coord) -  self.L/2
-                    if np.dot(dist,dist) <= radius_2:
-                        self.lattice[tuple(coord)] = p
-                       # self.particle_locations[p] = tuple(coord)
-                        p += 1
-                        if p == particles:
-                            break
-                    
-
-            x0,y0 = np.where(self.lattice == 0)       
-            while p <= particles:
-                r = np.random.randint(len(x0))
-                if self.lattice[x0[r],y0[r]] == 0:
-                    self.lattice[x0[r],y0[r]] = p
-                   # self.particle_locations[p] = tuple(coord)
-                    p += 1
-            
-            #now translate everything
-            
-            initial_coord = np.array([15,-10])
-            self.lattice = np.roll(np.roll(self.lattice,initial_coord[0],axis=0),initial_coord[1],axis=1)
-            
-            for coord,site in np.ndenumerate(self.lattice):
-                if site != 0:
-                    self.particle_locations[site] = tuple(coord)
+                    self.J[True][i][0,:] = 10*self.overlap_penalty
+                    self.J[False][i][0,:] = 10*self.overlap_penalty
+                    self.J[True][i][:,0] = 10*self.overlap_penalty
+                    self.J[False][i][:,0] = 10*self.overlap_penalty
+                elif i == 1:
+                    self.J[True][i][0,:] = 0.01*self.overlap_penalty
+                    self.J[False][i][0,:] = 0.01*self.overlap_penalty
+                    self.J[True][i][:,0] = 0.01*self.overlap_penalty
+                    self.J[False][i][:,0] = 0.01*self.overlap_penalty
+                elif i < 4: #an even smaller penalty for being adjacent.
+                    self.J[True][i][0,:] = 0.001*self.overlap_penalty
+                    self.J[False][i][0,:] = 0.001*self.overlap_penalty
+                    self.J[True][i][:,0] = 0.001*self.overlap_penalty
+                    self.J[False][i][:,0] = 0.001*self.overlap_penalty
+                
             
             
+            self.viable_dict[0] = (int(self.d/2),int(self.d/2))
+            
+            self.locations_dict[(int(self.d/2),int(self.d/2))] = 0
+            self.box_loc = {self.viable_dict[0]}
             
         else:
-            print("ERROR - DIMENSION NOT SUPPORTED")
-            return()
+            self.box_loc = set()
+            self.links = 0*np.identity(self.L+1,dtype=int)
+        self.electrostatic_modification_matrix()
+            
+        self.E0 = self.get_energy(ignore_repulsion=True)
+                            
+        self.energies[0] = self.get_energy() - self.E0
         
         
         
         
+        if self.L == 4:
+            self.enumerate_4_chains()
+            self.recognisable = True
+            
+            self.recognise()
         
-        
-        
-        
-        
-        self.unique = 1 + particles
-        self.position = np.zeros((self.unique,self.unique),dtype=int)
-        self.frame = np.zeros(self.unique,dtype=object)
-        self.frame = dict(zip([p for p in range(0,self.unique)],[np.array([0]*self.dimensions) for p in range(0,self.unique)]))
-        
-        
-        #frame is updated if a swap happens which crosses the boundary
-        #direction
-        
-        pairs = self.get_pairs()
-        for pair in pairs:
-            p1,p2 = pair
-            self.position[p1,p2] = 0 #self.max_x
-            self.position[p2,p1] = 0 #self.max_x 
-        self.results = dict()
-        self.pair_count = dict()
-        self.D = D
-        self.swaps = dict()
-        
-        self.lattice_snaps = dict()
-        self.E = self.total_energy()
-        
-        
-        
-    def compare_Boltzmann(self):
-        import matplotlib.pyplot as plt
-        #two situations - one where bond starts at 1 and one where starts at 0
-        
-        energies = list(set(self.results.values()))
-        
-        occurences = [(i,energies.count(i)) for i in energies]
-        
-
-        sim_results = dict()
-        theoretical_results = dict()
-
-        data = np.array(list(self.results.values()))
-        count = len(data)
-        arrangements = math.perm(self.L,2)
-        if self.L > 2:
-            degeneracy_unbonded = math.perm(self.L,1)*math.perm(self.L-3,1)
+            
+           
+            
+        if self.shape=='complex':
+            self.ET = self.get_energy(ignore_repulsion=True)/self.c_block_side_length**2
         else:
-            degeneracy_unbonded = 0
-        degeneracy_bonded = (arrangements - degeneracy_unbonded)
-        print("AUB",arrangements,degeneracy_unbonded,degeneracy_bonded)
-        if degeneracy_unbonded > 0:
-            to_add = {0}
-        else:
-            to_add = set()
-        energy_values = set(data).union(to_add)
-
-        #bonded is 0 or 1
-        #unbonded is not all the things that are 0
-
-        for x in energy_values:
-            print("x=",x,(x <= -self.initial_bonding_position),degeneracy_bonded,np.exp(-self.beta*x),(x==0)*degeneracy_unbonded)
-            theoretical_results[x] = (x <= -self.initial_bonding_position)*degeneracy_bonded*np.exp(-self.beta*x) + (x==0)*degeneracy_unbonded
-
-
-        theoretical_Z = np.sum(list(theoretical_results.values()))
-        theoretical_results = dict(zip(theoretical_results.keys(),(1./theoretical_Z)*np.array(list(theoretical_results.values()))))
-
-
-        for x in energy_values:
-            
-            r = np.sum(data == x)/count
-
-            sim_results[x] = r
-
-        sim_Z = np.sum(list(sim_results.values()))
-        sim_results = dict(zip(sim_results.keys(),(1./sim_Z)*np.array(list(sim_results.values()))))
-        print("ST",sim_results,theoretical_results)
-        plt.scatter(theoretical_results.values(),sim_results.values())
-         #sim_results.keys()))
-        plt.plot(theoretical_results.values(), theoretical_results.values())
+            self.ET = 0
         
-        
-    def draw_energies(self):
-        pairs = set()
-        for coord,site in np.ndenumerate(self.lattice): #range(0,len(self.lattice)):
-            
-            #site = self.lattice[i]
-            if site == 0: #no need to consider solvent
-                continue
-            for n in self.neighbours:
-                n_coord = (np.array(coord)+n)%self.L
-                neighbour = self.lattice[tuple(n_coord)]
-                #print("HERE",self.counter,(np.array(coord)+n)%self.L)
-                if neighbour != 0:
-
-                    pairs.add((tuple(sorted([site,neighbour])),coord))
-        E_matrix = np.zeros((self.L,self.L))
-        for info in pairs:
-           # print("HERE",info)
-            p1,p2 = info[0]
-            coord = info[1]
-            E = -self.position_energy_map[self.position[p1,p2]]*np.sign(p1)*np.sign(p2)
-            
-            E_matrix[tuple(coord)] += E
-        return(E_matrix)
+    def start_from_viable_dict(self,viable_dict):
+        self.viable_dict = viable_dict
+        self.locations_dict = {v: k for k, v in self.viable_dict.items()}
     
-    def total_energy(self):
-        E = 0
-        pairs = self.get_pairs()
-        for pair in pairs:
-            p1,p2 = pair
+    def make_groups(self):
         
-            E += -self.position_energy_map[self.position[p1,p2]]*np.sign(p1)*np.sign(p2)
+        array = np.array(list(set(list(self.viable_dict.keys())) - {0})) #remove the box
         
-            
-        return(E)
-        #gets here, means we just need the 
+        if len(array) == 0:
+            return([])
         
-        
-        return(-E)
-    
-    def get_pairs(self):
-        pairs = set()
-        for coord,site in np.ndenumerate(self.lattice): #range(0,len(self.lattice)):
-            
-            #site = self.lattice[i]
-            if site == 0: #no need to consider solvent
-                continue
-            for n in self.neighbours:
-                n_coord = (np.array(coord)+n)%self.L
-                neighbour = self.lattice[tuple(n_coord)]
-                #print("HERE",self.counter,(np.array(coord)+n)%self.L)
-                if neighbour != 0:
-                    
-                    pairs.add(tuple(sorted([site,neighbour])))
-        
-        return(pairs)
-    
-    def update_position(self):
-        
-        if len(self.pairs) == 0:
-            return()
-        
-        
-        #calculate if diffuses or not
-        if np.random.rand() > self.D:
-            return()
-        
-        pair = list(self.pairs)[np.random.randint(len(self.pairs))]
-        p1,p2 = pair
+        separate_groups = np.array_split(np.random.permutation(array), len(array))
 
-        old = np.copy(self.position[p1,p2])
-        old_bond_E = -self.position_energy_map[self.position[p1,p2]]
-       # new = np.random.randint(self.max_x+1)
-        dx = np.random.choice([-1,1])
-        new = min(max(old + dx,0),self.max_states-1)
-        
-        self.position[p1,p2] = new
-        self.position[p2,p1] = new
-        new_bond_E = - self.position_energy_map[self.position[p1,p2]]
+        self.separate_group_dict = dict()
+        for id_i in array:
+            self.separate_group_dict[id_i] = [index for index, x in enumerate([id_i in set(g) for g in separate_groups]) if x][0]
+            #this is the base case for if no splitting is to be done
+        self.separate_groups = [set(tt) for tt in separate_groups]
         
         
-        new_E = self.E - old_bond_E + new_bond_E # self.total_energy()
-      
+    def start_at_id(self, config_id):
         
-        if np.random.rand() < np.exp(-self.beta*(new_E - self.E)):
-            self.E = new_E
-        else:
-            self.position[p1,p2] = old
-            self.position[p2,p1] = old
+        self.viable_dict = {k:tuple((np.array(v))%self.d) for k, v in dict(self.all_configs[config_id]).items()}
+        self.locations_dict = {tuple((np.array(v))%self.d): k for k, v in self.viable_dict.items()}
+        self.config_ids[self.counter] = config_id
+        
+    def set_beta(self,beta):
+        self.beta = beta
+        self.beta_values[self.counter] = beta
         return()
+        #self.beta = max(-1000/self.backbone_strength,beta)
+      
+    
+    def erase_system(self):
+        self.viable_dict = dict()
+        self.locations_dict = dict()
+       # self.in_complex = set()
+        self.L = 0
+        self.E0 = 0
+        
+        if self.box != None:
+            self.viable_dict[0] = (int(self.d/2),int(self.d/2))
+            self.locations_dict[(int(self.d/2),int(self.d/2))] = 0
+    def generate_new(self):
+        
+
+        if self.box == None:
+        
+            return()
+        if len(set(self.box).intersection(set(self.locations_dict.keys()))) == 0:
+            #np.random.shuffle(self.box)
+            cut = np.random.randint(len(self.box))
+            temp_box = self.box[cut:] + self.box[0:cut]
+   
+            for i in range(0,4):
+                
+                self.L += 1
+                self.viable_dict[self.L] = temp_box[i]
+                self.locations_dict[temp_box[i]] = self.L
+              
+                
+             
+            self.links = np.pad(self.links,(0,4))
+            self.viable = set(self.viable_dict.values()) - self.box_loc
+            for ni in self.all_box_neighbours.intersection(self.viable):
+                ni_id = self.locations_dict[ni]
+                ni_neighbours = self.neighbour_dict.get(ni_id)
+                if ni_neighbours != None:
+                    #add whatever ni_id intersects with the box
+                    self.neighbour_dict[ni_id].update(ni_neighbours.intersection(self.box))
+
+            self.E0 += 3*self.backbone_strength
+        #else:
+         
+        self.make_groups()
+        
+    def count_complexes(self,initial=False,delta=1E-4):
+        self.energies[self.counter] = self.get_energy() - self.E0
+        if self.shape != "complex":
+            return()
+        G = nx.Graph()
+        G_any_bond_strength = nx.Graph()
+      
+        #remove complexes that have the fully set of bond-strengths and no more (+ no interaction with condensate), meaning they are free. 
+        #but as for counting that complexes are in the system, just having right number of bonds, regardless of strength, shouldbe enough
+      
+        for id_i,i in self.viable_dict.items():
+            for id_j,j in self.viable_dict.items():
+
+                diff_sq_ij,E_ij,_no_m_E_ij = self.get_energies(i,j,0,id_i,id_j,one=True,return_both=True)
+
+                if (E_ij < 0): #then actually bonded
+
+                    G.add_edge(id_i, id_j, weight=E_ij)
+                    
+                    G_any_bond_strength.add_edge(id_i, id_j, weight=_no_m_E_ij)
+                    
+      
+       
+        self.G = G
+        
+        self.weights = dict()
+        for site in self.viable_dict.keys():
+            if site != 0:
+            
+                self.weights[site] = sum([self.G.get_edge_data(edge[0],edge[1])['weight'] for edge in list(self.G.edges(site))])
+        #condition for a subgraph to be a complex:
+            #1 the same energy of a complex (with small tolerance because dealing with big numbers)
+
+        sub_graphs = nx.connected_components(G)
+        sub_graphs_any_bond_strength = nx.connected_components(G_any_bond_strength)
+        delta = delta
+        
+        complex_identities_any_bond_strength = [(abs(G_any_bond_strength.subgraph(s).size(weight='weight')-self.ET) < delta) and (set([(ss-1)%16 + 1 for ss in s]) == set(self.id_to_number.values()))  for s in sub_graphs_any_bond_strength]
+        
+        complex_identities = [(abs(G.subgraph(s).size(weight='weight')-self.ET) < delta) and (set([(ss-1)%16 + 1 for ss in s]) == set(self.id_to_number.values()))  for s in sub_graphs]
+        
+       
+        
+        if self.delete: #delete any fully formed complexes
+            members = [p for p in filter(bool,[s if c_I else None for s,c_I in zip(nx.connected_components(G),complex_identities)])]
+            if len(members)> 0:
+                self.neighbour_dict = dict()
+                self.complexes_removed[self.counter] = len(members)
+                for m in members:
+                    self.E0 -= self.ET #remove one complex of energy
+                    #this is a whole complex
+
+                    for id_m in m:
+                        del self.locations_dict[self.viable_dict[id_m]]
+                        del self.viable_dict[id_m]
+                        self.G.remove_node(id_m)
+
+                        self.make_groups()
+
+                self.make_groups()
+        ncomplexes = np.sum(complex_identities_any_bond_strength)
+        self.ncomplexes[self.counter] = ncomplexes
+        
+        return()
+
+        
+        
+    def set_square_bonding(self,straight,diag):
+        self.J[1][1,4] = straight
+        self.J[1][4,1] = straight
+
+        self.J[2][2,4] = diag
+        self.J[2][2,4] = diag
+
+        self.J[2][1,3] = diag
+        self.J[2][1,3] = diag
+    
+
+    def electrostatic_modification_matrix(self):
+        
+        if self.rmax == 0:
+            #then modification matrix always returns 1
+            self.M = np.ones((self.d,self.d),dtype=int)
+            return() #no change needed, no modifications
+        else:
+            self.M = np.ones((self.d,self.d))
+            for i in np.ndindex(np.shape(self.M)):
+                mid = np.array((int(self.d/2),int(self.d/2)))
+                v_i = np.array(i) - mid
+                r_i = np.sqrt(np.dot(v_i,v_i))
+                if self.gradient:
+                    self.M[i] = min(r_i/self.rmax,1)
+                else:
+                    self.M[i] = r_i > self.rmax
+                
+                
+    
+        
+    def get_energy(self,ignore_repulsion=False):
+        #get total energy of whole system. This is just for reporting.
+ 
+        E = 0
+       
+        k = list(self.viable_dict.keys())
+        v = list(self.viable_dict.values())
+        
+        if ignore_repulsion: #also remove any annealing effects
+            
+            temp = self.rmax
+            self.rmax = 0
+            self.electrostatic_modification_matrix()
+        
+        for vi in range(0,len(k)):
+            for vj in range(vi+1,len(k)):
+    
+                
+                id_i = k[vi]
+                id_j = k[vj]
+                
+                if id_i*id_j == 0:
+                    continue #don't include repulsion from box in reported energy in any case
+                
+                
+                
+                i = v[vi]
+                j = v[vj]
+                
+
+                diff_sq_ij,E_ij = self.get_energies(i,j,0,id_i,id_j,one=True)
+                
+
+                if ignore_repulsion:
+                    E += min(E_ij,0)
+                else:
+                    E += E_ij
+      
+        if ignore_repulsion:
+            self.rmax = temp  
+            self.electrostatic_modification_matrix()
+        return(E)
+    
+    def Boltzmann(self,beta): #gives the expected Boltzmann probs for the configurations at beta
+        self.set_beta(beta)
+        self.B_probabilities = dict(self.all_config_energies)
+        Z = 0
+        for config_id,e in self.B_probabilities.items():
+            factor = self.all_degeneracies[config_id]*np.exp(-self.beta*e)
+            Z += factor
+        for config_id,e in self.B_probabilities.items():
+            factor = self.all_degeneracies[config_id]*np.exp(-self.beta*e)
+            self.B_probabilities[config_id] = (factor/Z)
+        return(self.B_probabilities)
+
+
+    def recognise(self):
+      
+        if not self.recognisable:
+            return()
+        rot1 = np.array([[0,-1],[1,0]])
+        rot2 = np.array([[-1,0],[0,-1]])
+        rot3 = np.array([[0,1],[-1,0]])
+        man0 = dict(zip(self.viable_dict.keys(),[tuple(self.origin + np.array(aa) - (list(self.viable_dict.values())[0])) for aa in self.viable_dict.values()])) #man for manipulated
+        man1 = dict(zip(self.viable_dict.keys(),[tuple(self.origin + np.dot(rot1,np.array(aa) - (list(self.viable_dict.values())[0]))) for aa in self.viable_dict.values()]))
+        man2 = dict(zip(self.viable_dict.keys(),[tuple(self.origin + np.dot(rot2,np.array(aa) - (list(self.viable_dict.values())[0]))) for aa in self.viable_dict.values()]))
+        man3 = dict(zip(self.viable_dict.keys(),[tuple(self.origin + np.dot(rot3,np.array(aa) - (list(self.viable_dict.values())[0]))) for aa in self.viable_dict.values()]))
+      
+        self.config_ids[self.counter] = np.nan
+        #if sum([np.array_equal([np.array([cc[0],self.origin[1] + (self.origin[1]-cc[1])]) for cc in c],chain) for c in chains]) == 0:
+        
+        for config_id,config in self.all_configs.items():
+            
+            
+            r_config = dict(zip(self.viable_dict.keys(),[(cc[0],self.origin[1] + (self.origin[1]-cc[1])) for cc in config.values()]))
+            
+            if config==man0 or config==man1 or config==man2 or config==man3:
+                
+                self.config_ids[self.counter] = config_id
+            
+                
+            elif r_config==man0 or r_config==man1 or r_config==man2 or r_config==man3:
+                
+            
+                self.config_ids[self.counter] = config_id
+        
+                
+            
+               
+        return()
+ 
+    def enumerate_4_chains(self): #returns a dictionary of the names of different possible chains of length 4
+        chains = []
+        degeneracies = dict()
+        
+        first = [np.array([1,0]),np.array([1,1])]
+        #if the polymer has not yet extended into the LR direction, pick one with sign
+        for f in first:
+            for s in self.NNdirections[0:8]:
+                chain = [self.origin] + [self.origin+f]     
+                if sum([np.array_equal(c,(self.origin+f+s)) for c in chain]) == 0: #such that there are no overlaps 
+                    for t in self.NNdirections[0:8]:
+                        chain = [self.origin] + [self.origin+f] + [self.origin+f+s]
+                        if sum([np.array_equal(c,(self.origin+f+s+t)) for c in chain]) == 0:
+                            #then chain doesn't overlap. Check if it already exists through reflection or rotation
+                            chain = [self.origin] + [self.origin+f] + [self.origin+f+s] + [self.origin+f+s+t]
+                            condition = np.array([np.array_equal([np.array([cc[0],self.origin[1] + (self.origin[1]-cc[1])]) for cc in c],chain) for c in chains]) + np.array([np.array_equal([np.array([cc[1],cc[0]]) for cc in c],chain) for c in chains])
+                            if sum(condition) == 0:
+                                #if sum([np.array_equal([np.array([cc[1],cc[0]]) for cc in c],chain) for c in chains]) == 0:
+                              
+                                chains.append(chain)
+                                
+                                degeneracies[len(chains)] = 1
+                                
+                                
+                            else:
+                                #there are reflections for this chain
+                                 
+                                loc = np.where(condition)
+                                
+                                degeneracies[loc[0][0]+1] += 1
+                               
+        
+        chains_as_dicts = [dict(zip([1,2,3,4],[tuple(cc) for cc in c])) for c in chains]
+        self.all_configs = dict(zip([i for i in range(1,len(chains_as_dicts)+1)],chains_as_dicts))
+        
+        self.all_config_energies = dict()
+        self.all_degeneracies = dict()
+        all_config_energies = dict()
+        old_viable_dict = dict(self.viable_dict)
+        for config_id,config in self.all_configs.items():
+           
+            self.viable_dict = config
+            energy = self.get_energy() - self.E0
+            self.all_config_energies[config_id] = energy
+            self.all_degeneracies[config_id] = degeneracies[config_id]
+        
+        #organise all_configs so that config 1 is GS, 2 is second most etc etc
+        
+        #this is a disgustingly messy piece of code.
+        self.viable_dict = old_viable_dict
+        
+        
+        #sort all_config.values() by all_config_energies()
+        Y = [-d*np.exp(-e) for d,e in zip(self.all_degeneracies.values(),list(self.all_config_energies.values()))]
+        X = [i for i in range(0,len(Y))]
+        
+        
+        all_config_values = [x for _, x in sorted(zip(Y, X))] #this is the sorted list
         
         
         
+        place = 0
+        copy_all_configs = dict(self.all_configs)
+        copy_all_config_energies = dict(self.all_config_energies)
+        copy_all_degeneracies = dict(self.all_degeneracies)
+        for key,value in self.all_configs.items():
+            
+            self.all_configs[key] = copy_all_configs[all_config_values[place]+1]
+            self.all_config_energies[key] = copy_all_config_energies[all_config_values[place]+1]
+            self.all_degeneracies[key] = copy_all_degeneracies[all_config_values[place]+1]
+            place += 1
+        probs = [p for p in self.all_degeneracies.values()]
+        self.weights = [p/sum(probs) for p in probs] 
+
+        
+        
+        #self.all_configs = dict(zip([i for i in range(1,len(chains_as_dicts)+1)],all_config_values))
+        #[x for _, x in sorted(zip(Y, X))]
+       
+        #self.Boltzmann()
+        return()
+    
+    def swap_units(self,repeats):
+        
+        units = int(16*self.c_block_side_length**2/4)
+       
+        for i in range(0,repeats):
+            r1 = np.random.randint(0,units)*4 + 1
+            r1_keys = [r1+i for i in range(0,4)]
+            r2 = np.random.randint(0,units)*4 + 1
+            r2_keys = [r2+i for i in range(0,4)]
+            
+            for k1,k2 in zip(r1_keys,r2_keys):
+                
+                temp = tuple(self.viable_dict[k1])
+               
+                
+                self.locations_dict[tuple(np.array(self.viable_dict[k1])%self.d)] = k2
+                self.locations_dict[tuple(np.array(self.viable_dict[k2])%self.d)] = k1
+                
+                
+                self.viable_dict[k1] = self.viable_dict[k2]     
+                self.viable_dict[k2] = temp
+
+ 
+    
+    
+    
+    def get_energies(self,i,j,VM,id_i,id_j,one=False,return_both=False):
+        
+        
+        delta = np.array(j)-np.array(i)
+        a_delta = np.abs(delta)
+        v_ij = np.array([x if 2*ax < self.d else -np.sign(x)*(self.d - ax) for x,ax in zip(delta,a_delta)])
+        
+        diff_sq_ij = min(np.dot(v_ij,v_ij),6)
+        
+        wid_j = self.wids[id_j]
+        wid_i = self.wids[id_i]
+        
+        same = np.abs(id_i - id_j) <=4
+        
+        E_ij = self.J[same][diff_sq_ij][wid_i][wid_j]
+        
+
+        condition = (id_i*id_j != 0)*0.1*self.overlap_penalty #will modifiy bonds if electrostatic, otherwise since box, and will not modify backbone
+        if np.abs(E_ij) < condition:
+            #then not backbone
+            m = self.M[i]*self.M[j]
+        else:
+            m = 1
+        
+        if one:
+            if return_both:
+                return(diff_sq_ij,m*E_ij,E_ij)
+                
+            else:
+                
+                return(diff_sq_ij,m*E_ij)
+
+        v_ipj = -VM + v_ij
+        diff_sq_ipj = min(np.dot(v_ipj,v_ipj),6)
+        v_ijp = VM + v_ij
+        diff_sq_ijp = min(np.dot(v_ijp,v_ijp),6)
+        diff_sq_ipjp = diff_sq_ij
+        
+        
+        
+
+        E_ipj = self.J[same][diff_sq_ipj][wid_i][wid_j]
+        
+        E_ipjp = self.J[same][diff_sq_ipjp][wid_i][wid_j]
+        
+        E_ijp = self.J[same][diff_sq_ijp][wid_i][wid_j]
+   
+        ip = tuple((i+VM)%self.d)
+        jp = tuple((j+VM)%self.d)
+            
+            
+        modifiers = np.array([m,self.M[ip]*self.M[j],self.M[ip]*self.M[jp],self.M[i]*self.M[jp]])
+        
+        energies = np.array([E_ij,E_ipj,E_ipjp,E_ijp])
+        
+        m_energies = np.where(abs(energies)<condition,modifiers*energies,energies)
+        
+        return(m_energies)
+            
+  
+    
+    
+    def try_u_to_v(self,i_group,j_group,VMM): #calculate f_rev, the chance that j is linked to i given i -> ip
+        
+        E1_tot = 0
+        E2_tot = 0
+        for id_i in i_group:
+            
+            i = self.viable_dict[id_i]
+            
+            for id_j in j_group:
+
+                self.current_neighbour_dict[id_i] -= {id_j} #because we are determining this move, don't need to do this again.
+
+    
+                j = self.viable_dict[id_j]
+            
+                calculated_energies = self.get_energies(i,j,VMM,id_i,id_j)
+                
+                
+                E_ij,E_ipj,E_ipjp,E_ijp = calculated_energies
+                    
+                E1 = E_ij - E_ipj #is the change in energy if just i moves (they are not in the cluster together)
+              
+                dE = self.current_dE[(tuple(sorted([id_i,id_j])))] = tuple(calculated_energies)
+                
+                
+                E2 = E_ipjp - E_ijp
+
+                E1_tot += E1
+                E2_tot += E2
+   
+        #status = 1       link forms, is incoorporated into cluster
+        #status = -1      forward but not backward. Doesn't work, but may be admitted later    
+        #status = -2      #not forward. Outright failure.
+        
+        
+        p = max(0,1 - np.exp(self.beta*E1_tot))  
+
+        if E1_tot < 0.1*self.backbone_strength: #then would break backbone if not linked. Must be linked
+          
+            p = 1
+        
+        if np.random.rand() < p: # link forms, provisionally, test if reverse move allowed
+            
+            p_rev = max(0,1 - np.exp(self.beta*E2_tot)) #theta*I_ij_mu*
+            
+            
+            f_rev = min(1,p_rev/p)
+            if np.random.rand() < f_rev:
+                
+                status = 1
+                prob = True
+            else:
+                #we can remove j as a possible neighbour of i
+
+                status = -1 #frustrated
+                prob = False
+        else: #outright failure - this contributes to the energy 
+
+            status = -2 
+            prob = False
+
+        for ii in i_group:
+            for jj in j_group:
+                self.links[ii,jj] = status
+                self.links[jj,ii] = status
+        
+        return(prob)
+
+    def get_neighbours(self,i_group,pos=None,group=False,VMMC=True):
+
+        neighbours = set()
+
+        for id_i in i_group:
+            
+            discard_frustrated = True
+            i = self.viable_dict.get(id_i)
+
+            if i == None:
+                #then it is a blank because Kawasaki
+                i = pos
+            i_neighbours = self.current_neighbour_dict.get(id_i)
+            
+            
+            
+            if i_neighbours == None: #gets here if Kawasaki or first time VMMC with no links made yet
+                discard_frustrated = False
+                 #haven't done this so will be no frustrated to discard
+                all_i_neighbours = self.neighbour_dict.get(id_i) #save time by just using this
+                
+                if all_i_neighbours == None: #then need to get this again
+                    
+                    if VMMC:
+                        i_neighbours = set([tuple((i + NN)%self.d) for NN in self.NNdirections[0:8]]) - self.box_loc
+                        other_i_neighbours = set([tuple((i + NN)%self.d) for NN in self.NNdirections[8:-1]])
+                        all_i_neighbours = i_neighbours.union(other_i_neighbours)
+                        
+                    else: #neighbours must have everything
+                        all_i_neighbours = set([tuple((i + NN)%self.d) for NN in self.NNdirections[0:-1]])
+                        i_neighbours = set(all_i_neighbours)
+                    
+                    
+                    
+                    self.neighbour_dict[id_i] = set(all_i_neighbours)    #can remain between iterations
+                    i_neighbours -= self.C
+                else:
+                    #have previously calculated neighbours
+                    if VMMC:
+                        #then we only want a subsection of these
+                        i_neighbours = set([tuple((i + NN)%self.d) for NN in self.NNdirections[0:8]]) - self.C - self.box_loc
+                    else: 
+                        #we need all of them
+                        i_neighbours = all_i_neighbours - self.C
+                    
+                i_neighbours = i_neighbours.intersection(self.viable)
+                all_i_neighbours = all_i_neighbours.intersection(self.viable)
+                self.current_neighbour_dict[id_i] = i_neighbours #POINTERS
+                self.environment.update(set(all_i_neighbours)-self.C)
+                
+            else:
+                
+                pass
+            
+                
+            l = list(i_neighbours)
+            if group:
+                #get rid of anything that is already in the cluster as another instance,
+                #make sure to do this randomly
+                for index in np.random.permutation(len(i_neighbours)):
+                    i_n = l[index] #just to be safe
+                    id_in = self.locations_dict[i_n]
+                   
+                    if (id_in-1)%(self.unit_x_polymer)+1 in self.C_types:
+                        i_neighbours.remove(i_n)
+                        #self.current_neighbour_dict[id_i] -= {i_n}
+
+            #only need to discard things from existing list 
+                       
+            if discard_frustrated:
+                #remove things that have already been tried against i
+                for n in list(i_neighbours):
+
+                    if self.links[self.locations_dict[i]][self.locations_dict[n]] != 0: 
+                        i_neighbours -= {n}
+                        #self.current_neighbour_dict[id_i] -= {n}
+                        
+
+            neighbours = neighbours.union(i_neighbours)
+            
+        
+        #remove anything that's already in group
+        #neighbours = neighbours - set([self.viable_dict.get(id_i) for id_i in i_group])
+        
+        self.neighbour_dict.pop(None,None)
+        self.current_neighbour_dict.pop(None,None)
+        return(set([self.locations_dict[n] for n in neighbours])) #return as ids
+    
+    
+    
+    def randomly_sample_states(self):
+        current_id = self.config_ids[self.counter]
+        current_E = self.get_energy()
+        #candidate = np.random.randint(1,48)
+        
+        candidate = np.random.choice(list(self.all_degeneracies.keys()), 1,p=self.weights)[0]
+        
+        
+        self.start_at_id(candidate)
+        candidate_E = self.get_energy()
+        if not self.evaluate_move(candidate_E - current_E):  
+            self.start_at_id(current_id)
+            
+    def evaluate_move(self,deltaE):
+        if deltaE > -0.001*self.backbone_strength:
+            #then since breaking a backbone bond, overlapping or moving back towards box can't accept
+            return(False)
+        
+        p = min(1,np.exp(min(-self.beta*deltaE,0)))
+        
+        accept_cluster = (np.random.rand() < p)
+    
+        return(accept_cluster)
+                   
+
     def Kawasaki(self):
         
+      #  viable = self.viable #remove box as possible seed, it never moves
         
-        #a big speed up perhaps? Not really
-        
-        
-        self.swaps[self.counter] = 0
-        
-        #get old stuff copied
-        
-        #shuffle neighbour ids and pick the first one. Use the rest for site 1. Mirror them (* -1 ) for site 2
-        np.random.shuffle(self.neighbour_ids)
-        
-        direction_id = self.neighbour_ids[0]
+        i = list(self.viable)[np.random.randint(len(self.viable))]
         
         
-        
-        
-        
-      
-        
-        particle = 1+np.random.randint(self.particles)
-        
-        
-        site1 = tuple(self.particle_locations[particle] + np.array([0]))
-        
-        if self.local:
-            direction = self.neighbours[direction_id]
-            adjacent_coordinate = site1 + direction
-            PBC_adjacent_coordinate = adjacent_coordinate%self.L
-            site2 = tuple(PBC_adjacent_coordinate)
-            
-        else:
-            #make sure big enough
-            if self.L -2 <= 2:
-                return()
-            direction = np.random.randint(2,self.L-1,size=self.dimensions)
-            adjacent_coordinate = site1 + direction
-            PBC_adjacent_coordinate = adjacent_coordinate%self.L
-            
-            site2 = tuple(PBC_adjacent_coordinate)
-        self.directions_dict[self.counter] = direction
-
-        #print("S1S2", site1,site2,direction)
-        
-        if self.mode == "ps":
-            #then since we only allow particle-solvent swaps, we need to make sure site 2 is solvent
-            #note this would get FRAP wrong but might speed up initial condensation
-            if self.lattice[site2] != 0:
-                return()
-        
-        #determine whether it's particle-particle interaction
-        
-        
-        
-        if self.local:
-            site1_env = [self.lattice[tuple((site1+self.neighbours[n_id])%self.L)] for n_id in self.neighbour_ids[1:]]
-            site2_env = [self.lattice[tuple((site2-self.neighbours[n_id])%self.L)] for n_id in self.neighbour_ids[1:]]
-        else:
-            #consider all bonds
-            site1_env = [self.lattice[tuple((site1+self.neighbours[n_id])%self.L)] for n_id in self.neighbour_ids[0:]]
-            site2_env = [self.lattice[tuple((site2-self.neighbours[n_id])%self.L)] for n_id in self.neighbour_ids[0:]]
-            
-      
-   
-        site1_bonds = [1*int(self.position[self.lattice[site1],p]) for p in site1_env]
-        site2_bonds = [1*int(self.position[self.lattice[site2],p]) for p in site2_env]
-        
-        pp_interaction = [np.sign(self.lattice[site1])*np.sign(p) for p in site1_env] + [np.sign(self.lattice[site2])*np.sign(p) for p in site2_env]
-        pp_interaction_bool = [bool(p) for p in pp_interaction]
-        #print("pp_interaction_bool",site1,site2,site1_bonds,site2_bonds)
-        
-        bond_list = site1_bonds+site2_bonds
-        
-        
-        pp_bonds = list(compress(bond_list, pp_interaction_bool))
-        #print("GIVES", self.counter,pp_bonds)
-        
-        outcome_count = [pp_bonds.count(v) for v in self.possible_positions]
-        
-        p = multinomial.pmf(outcome_count, n=len(pp_bonds), p=self.acceptance_probabilities)
-        
-        if p < np.random.rand():
-            return()
-        
-        #the positions that will be altered: site1:site1_env and 
-        
-        #old_positions = np.copy(self.position)
-        
-      
-        
-        x_new = np.random.choice(self.possible_positions,len(bond_list),p=self.acceptance_probabilities)
-        
-        dE = np.sum([self.position_energy_map[p] for p in pp_bonds])
-       # print("NEW", x_new,dE)
-       
-        p1 = self.lattice[site1]
-        p2 = self.lattice[site2]
-        
-  
-        v = 0
-        for p_env in site1_env:
-            #reset old to 0, get new
-            self.position[p1,p_env] = 0
-            self.position[p_env,p1] = 0
-            self.position[p2,p_env] = x_new[v]*np.sign(p2)*np.sign(p_env)
-            self.position[p_env,p2] = self.position[p2,p_env]
-            
-            
-            dE -= self.position_energy_map[self.position[p2,p_env]]*np.sign(p2)*np.sign(p_env)
-            v += 1
-            
+        VMM = self.NNdirections[np.random.randint(0,8)]
      
-        for p_env in site2_env:
-            self.position[p2,p_env] = 0
-            self.position[p_env,p2] = 0
-            self.position[p1,p_env] = x_new[v]*np.sign(p1)*np.sign(p_env)
-            self.position[p_env,p1] = self.position[p1,p_env]
-            #print("ADDING", p1,p_env,)
-           
-            dE -= self.position_energy_map[self.position[p1,p_env]]*np.sign(p1)*np.sign(p_env)
-            v += 1
-       # print("DE ",dE)
-        temp = np.copy(self.lattice[tuple(site1)])
-        self.lattice[tuple(site1)] = self.lattice[tuple(site2)]
-        self.lattice[tuple(site2)] = temp
-        
-        E_after = (self.E+dE)
-        
-        
+       # j = ((i[0] + VMM[0])%self.d,(i[1] + VMM[1])%self.d)
+        j = tuple((i + VMM)%self.d)
        
-      
-        
-        if np.random.rand() < min(np.exp(-self.beta*(E_after - self.E)),1):
-            
-            #swap occurs
-            self.E = E_after
-            self.swaps[self.counter] = 1
-            
-         
-        
-            for p_env in site1_env:
-                
-                self.pairs.discard(tuple(sorted([p1,p_env])))
-                if p_env != 0 and p2 != 0:
-                    self.pairs.add(tuple(sorted([p2,p_env])))
-                
-            for p_env in site2_env:
-                self.pairs.discard(tuple(sorted([p2,p_env])))
-                if p_env != 0:
-                    self.pairs.add(tuple(sorted([p1,p_env])))
-            
-            if p2 != 0:
-                self.particle_locations[p2] = site1
-            
-            self.particle_locations[p1] = site2
-            
-            #lastly update the frame
-            if self.local:
-                if not np.array_equal(adjacent_coordinate,PBC_adjacent_coordinate):
+        self.C = {i,j}
 
+        id_j = self.locations_dict.get(j)
+        id_i = self.locations_dict[i]
+ 
+        if id_j == 0:
+            return() #can't do a swap with Box, it stays stationary
+        
+        neighbours_i = self.get_neighbours({id_i},VMMC=False)
+       
+        
+        neighbours_j = self.get_neighbours({id_j},pos=j,VMMC=False)
 
-                    self.frame[p1] += direction
-                    #print("HERE",adjacent_coordinate,PBC_adjacent_coordinate,direction,self.frame)
-                    if p2 != 0:
-                        self.frame[p2] -= direction
-                    
-                
-                
-                
-            return()
+        E_before = sum([self.get_energies(i,self.viable_dict[id_ni],0,id_i,id_ni,one=True)[1] for id_ni in neighbours_i])
+        
+        E_after = sum([self.get_energies(j,self.viable_dict[id_nj],0,id_i,id_nj,one=True)[1] for id_nj in neighbours_j])
+        
+        
+        
+        if id_j != None:
 
-        #reverse the swap and return positions
-        
-        temp = np.copy(self.lattice[tuple(site1)])
-        self.lattice[tuple(site1)] = self.lattice[tuple(site2)]
-        self.lattice[tuple(site2)] = temp
-        
-        #print("BEFORE", self.position)
-        
-        for p,old_p in zip(site1_env,site1_bonds):
-            self.position[self.lattice[site1],p] = int(old_p)
-            self.position[p,self.lattice[site1]] = int(old_p)
-        for p,old_p in zip(site2_env,site2_bonds):
-            self.position[self.lattice[site2],p] = int(old_p)
-            self.position[p,self.lattice[site2]] = int(old_p)
+            E_before += sum([self.get_energies(j,self.viable_dict[id_nj],0,id_j,id_nj,one=True)[1] for id_nj in neighbours_j])
             
-        #print("NOW", self.position)
-       # site1_bonds = [np.copy(self.position[self.lattice[site1],p]) for p in site1_env]
-        #site2_bonds = [np.copy(self.position[self.lattice[site2],p]) for p in site2_env]
+            E_after += sum([self.get_energies(i,self.viable_dict[id_ni],0,id_j,id_ni,one=True)[1] for id_ni in neighbours_i])
+
+        deltaE = E_after - E_before
         
-        #self.position = old_positions
         
-    def show(self,bleached=False,plot=True):
-        if not bleached:
-            if plot:
-                plt.imshow(self.lattice != 0)
-                return
+        if self.evaluate_move(deltaE):
+            
+            #change neighbour dict
+            
+            self.neighbour_dict[id_i] = (neighbours_j - {i}).add(j)
+            
+            
+            
+            for ni in neighbours_i: 
+                n_ni = self.neighbour_dict.get(ni) #going to modify any neighbours that we have
+                if n_ni != None: # then it may have a neighbourhood that needs adjusting
+                    intersection = len(n_ni.intersection(self.C))
+                    if intersection == 2: #
+                        continue
+                    elif intersection == 1:
+                        self.neighbour_dict[ni] = (self.neighbour_dict[ni] - {i}).add(j)
+                    else:
+                        print("ERROR", self.counter, "i NEIGHBOURHOOD INCORRECT",intersection)
+                        return()
+                        
+                        #whatever the neighbour doesn't see in C we add.
+                        
+                        #if neighbour of i saw i,j: leave
+                        #if neighbour of i saw i: add j remove i 
+                        #if neighbour of i saw j: not possible
+                        
+
+                
+            for nj in neighbours_j: 
+                n_nj = self.neighbour_dict.get(nj) #going to modify any neighbours that we have
+                if n_nj != None: # then it may have a neighbourhood that needs adjusting
+                    intersection = len(n_nj.intersection(self.C))
+                    if intersection == 2: #
+                        continue
+                    elif intersection == 1:
+                        self.neighbour_dict[nj] = (self.neighbour_dict[nj] - {j}).add(i)
+                    else:
+                        print("ERROR", self.counter, "j NEIGHBOURHOOD INCORRECT")   
+                        return()
+
+            self.locations_dict[j] = id_i
+            self.viable_dict[id_i] = j
+            if id_j != None:
+                #no changes needed to self.viable 
+                
+                
+                self.neighbour_dict[id_j] = (neighbours_i - {j}).add(i)
+                self.locations_dict[i] = id_j
+                self.viable_dict[id_j] = i
             else:
-                return(self.lattice != 0)
-        else:
-            
-            bl = np.zeros_like(self.lattice)
-            for c,v in np.ndenumerate(self.lattice):
-                if v not in self.bleached:
-                    bl[c] = v
-            if plot:
-                plt.imshow(bl != 0)
-            else:
-                return(bl != 0)
-        
-    def get_COM(self):
-        L = self.L
-        test_lattice = self.lattice
-        COM = np.array([0.,0.])
-        
-        rolls = dict()
-        for axis in [0,1]:
-            possible_particle_coordinates = {i:np.array(np.where(np.roll(test_lattice,i,axis=axis) != 0)).T for i in range(0,L)}
+                self.viable -= {i}
+                self.viable.add(j)
+                del self.locations_dict[i]
 
-            possible_COMS = {i:np.sum(p,axis=0)/len(p) for i,p in possible_particle_coordinates.items()}
-
-            possible_arc_lengths = {i:np.sum([np.dot(z,z) for z in possible_COMS[i]-possible_particle_coordinates[i]]) for i in possible_particle_coordinates.keys()}
-
-            best = min(possible_arc_lengths, key = possible_arc_lengths.get)
-            rolls[axis] = best
-            self.rolls = rolls
-            COM[axis] = (possible_COMS[best][axis])%self.L
-            #print("a",axis,)
-            
-        
-        self.COM = COM
-        #print("COM", self.COM)
-            
-        
-    def FRAP(self,radius):
-        
-        if self.first_FRAP:
-            self.first_FRAP = False
-            self.get_COM()
-
-            #now roll the lattice and positions
-
-            self.lattice = np.roll(np.roll(self.lattice,self.rolls[0],axis=0),self.rolls[1],axis=1)
-
-            for coord,site in np.ndenumerate(self.lattice):
-                    if site != 0:
-                        self.particle_locations[site] = tuple(coord)
-
-            #also flip all previous things 
-
-            for k,l in self.lattice_snaps.items():
-
-                self.lattice_snaps[k] = np.roll(np.roll(self.lattice_snaps[k],self.rolls[0],axis=0),self.rolls[1],axis=1)
-                self.energy_snaps[k] = np.roll(np.roll(self.energy_snaps[k],self.rolls[0],axis=0),self.rolls[1],axis=1)
-            
-            
-            
-            
-        
-        bleach_time = self.counter
-        self.bleach_time = bleach_time
-        self.bleach_times.append(bleach_time)
-        self.bleached[bleach_time] = set()
-        self.radius = radius
-        for coord,site in np.ndenumerate(self.lattice):
-            
-            delta = coord - self.COM
-            a_delta = np.abs(delta)
-            dist = np.array([x if 2*ax < self.L else -np.sign(x)*(self.L - ax) for x,ax in zip(delta,a_delta)])
-            
-            #dist = np.minimum(np.array(coord) - self.COM)
-            #need to account for PBC
-            
-            if np.dot(dist,dist) <= radius**2:
-                self.bleached[bleach_time].add(site)
-        self.lattice_snaps[self.counter] = self.lattice
-        self.frame_snaps[self.counter] = {k: np.array(v) for k, v in self.frame.items()}
-        
-    def history(self,bleached=False):
-        import matplotlib.pyplot as plt
-        #print(self.lattice_snaps.keys())
-        fig,axs = plt.subplots(1 + len(self.bleach_times),len(self.lattice_snaps.keys()))
-        fig.set_size_inches(20.5, 5.5)
-        fig.suptitle('$\\beta$ = ' + str(self.beta)+', L = ' + str(self.L) + ', D = ' + str(self.D) + ', t = ' + str(self.counter) + ', $J_{min} = $' + str(self.initial_bonding_position) + ', $J_{max} = $' + str(self.max_x)+', states = ' + str(self.max_states), fontsize=16)
-        for b in range(0,len(self.bleach_times)):
-            bleach_time = self.bleach_times[b]
-            for i,k in zip(range(0,len(axs[0])),list(self.lattice_snaps.keys())):
-                #print("ik",i,k,k >= self.bleach_time)
-                l = self.lattice_snaps[k] #np.roll(np.roll(,self.rolls[0],axis=0),self.rolls[1],axis=1) #/(4*self.max_x)
-                if bleached and k >= bleach_time:
-
-                    bl = np.zeros_like(l)
-                    for c,v in np.ndenumerate(l):
-                        if v not in self.bleached[bleach_time]:
-                            bl[c] = v
-                        else:
-
-                            frame_dist = self.frame_snaps[k][v] - self.frame_snaps[bleach_time][v]
-                            #print("HERE",c,v,frame_dist,self.bleached)
-                            if np.dot(frame_dist,frame_dist) != 0:
-                                bl[c] = v   
-                else:
-                    bl = l
-                axs[b][i].set_title(k)
-                axs[b][i].matshow(((bl == 0) + 0),vmin=0,vmax=1,cmap='Greys')
-                axs[b][i].set_axis_off()
-                #Erolled = np.roll(np.roll(self.energy_snaps[k],self.rolls[0],axis=0),self.rolls[1],axis=1)
-            for i,k in zip(range(0,len(axs[0])),list(self.energy_snaps.keys())):
-                axs[len(self.bleach_times)][i].imshow(-self.energy_snaps[k]/(4*self.max_x),vmin=0,vmax=1)
-            
-                axs[len(self.bleach_times)][i].set_axis_off()
-    def plot_FRAP_recovery(self):
-        #get the amount of fluorescence in the radius
-        #
-        self.flu_data = dict()
-        for bleach_time in self.bleach_times:
-            self.flu = dict(zip(list(self.lattice_snaps.keys()),[0 for j in list(self.lattice_snaps.keys())]))
-            for k in list(self.lattice_snaps.keys()):
-                #l = self.lattice_snaps[k]
-                l = self.lattice_snaps[k] #np.roll(np.roll(,self.rolls[0],axis=0),self.rolls[1],axis=1)
-                for coord,site in np.ndenumerate(l):
-
-                    dist = np.array(coord) - self.COM
-                    if np.dot(dist,dist) <= self.radius**2:
-                        #then it's inside.
-
-                        if site != 0: #make sure it's a particle
-                            if k < bleach_time:
-                                self.flu[k] += 1
-                            else:
-                                if site not in self.bleached[bleach_time]: #check whether it got bleached
-                                    self.flu[k] += 1
-                                else:
-                                    #print("INSIDE", coord,site)
-                                    frame_dist = self.frame_snaps[k][site] - self.frame_snaps[bleach_time][site]
-                                    if np.dot(frame_dist,frame_dist) != 0:
-                                        self.flu[k] += 1
-            
-            #print(self.flu)
-            self.flu_data[bleach_time] = self.flu
-        return(self.flu_data)
-                
-        
-     
+        return()
     
-    def iterate(self,iterations=0,snaps=0,mode=None,anneal=False,local=True):
-        if snaps > 1:
-            every = int(iterations/(snaps-1))
-        elif snaps == 1:
-            every = iterations
+    
+            
+            
+    def VMMC(self,group=False):
+        
+        if 0==1: #group:
+
+            #select p polymers, that all have different types to form a superparticle.
+
+            p = 4
+
+            #what this means really is just that we need to pick 4 random numbers to describe which polymer each one
+            #gets to be. The random numbers need to track which polymers are actually in the system.
+
+            p_types = np.random.choice(range(0,4),p,replace=False) #which type of polymer
+
+
+            #what is the minimum number of types
+            p_type_min = int(np.floor(len(self.viable_dict)/16))
+            polymer_ids = np.random.randint(p_type_min,size=p) #which instance of the type, will need to be modified when polymer generation
+            polymer_length = 4
+            polymers_in_complex = 4
+            p_to_group = [[polymer_length*polymers_in_complex*p_id + polymer_length*p_type+1 + x for x in range(0,polymer_length)] for p_id,p_type in zip(polymer_ids,p_types)]
+            
+            
+            p_to_group = list(itertools.chain.from_iterable(p_to_group))
+            
+            
+
+            groups = [[a] for a in set(list(self.viable_dict.keys()))-{0} - set(p_to_group)] + [p_to_group]
+            
+            group_dict = dict()
+            for id_i in (set(self.viable_dict.keys()) - {0}):
+                group_dict[id_i] = [index for index, x in enumerate([id_i in set(g) for g in groups]) if x][0]
+            groups = [set(tt) for tt in groups]
+        
+        
         else:
-            every = 1
-        
-        self.mode = mode
-        self.pairs = self.get_pairs()
-        
-        #print("HERE",self.pairs)
-        self.E = self.total_energy()
-        self.pair_count[self.counter] = len(self.pairs)
-        self.results[self.counter] = self.E
-        for iteration in range(0,iterations+1):
-            if anneal:
-                self.beta = iteration/iterations
-            if not local:
-                self.local = np.random.choice([True,False])
-            else:
-                self.local = True
-            
-            if iteration%every==0:
-                
-                self.results[self.counter] = self.E
-                self.pair_count[self.counter] = self.pairs
-                self.lattice_snaps[self.counter] = np.copy(self.lattice) 
-                self.energy_snaps[self.counter] = self.draw_energies()
-                self.frame_snaps[self.counter] = {k: np.array(v) for k, v in self.frame.items()}
-            
-            self.Kawasaki()
-           
-            self.update_position()
-            #print("U",self.E,self.lattice)
-            
-            if iteration == iterations:
-                return()
-            self.counter += 1
-        #self.counter -= 1
-            
+            group_dict = self.separate_group_dict
+            groups = self.separate_groups
+        group = True #won't matter
+        #print("HERE", self.counter,groups)
+        i_group = groups[np.random.randint(len(groups))]
+ 
+        VMM = self.NNdirections[np.random.randint(0,8)]
+       
+        proposing = True
   
+        self.C = set([self.viable_dict[ii] for ii in i_group])
+        if group:
+            self.C_types = set([(ii-1)%(self.unit_x_polymer)+1 for ii in i_group])
+            #print("HERE", self.counter,self.C_types)
+        self.environment = set()
+        
+        self.current_dE = dict()
+        members_in_cluster = set()
+        ids_to_test = set(i_group)
+        while proposing: #enter the loop with an i, we pick a j at random.
+            
+            #if GVMMC, don't consider as neighbours anything that has the same type
+            #something is the same type if it is separated by
+            #exactly 16 from something already in the cluster
+            
+            neighbours = self.get_neighbours(i_group,group=group) # - {0} #self.box_loc
+           
+            if len(neighbours-{0}) == 0:
+
+                for id_i in i_group:
+                    self.links[id_i,id_i] = -1 #mark these ones out
+                    members_in_cluster.add(id_i)
+                    ids_to_test -= {id_i}
+                   
+                
+                
+                if len(ids_to_test) == 0:
+                    #then there are no more states that can form cluster
+                    proposing=False
+                    break
+                else:
+                    #randomly pick one of these groups to be next
+                   
+                    random_id = list(ids_to_test)[np.random.randint(len(ids_to_test))]
+                  
+                    i_group = groups[group_dict[random_id]]
+                  
+                    continue
+            
+            
+            id_j = list(neighbours -{0})[np.random.randint(0,len(neighbours-{0}))]
+            
+            j = self.viable_dict[id_j]
+         
+            j_group = groups[group_dict[id_j]]
+               
+            
+            if self.try_u_to_v(i_group,j_group,VMM): #evaluates the probability of accepting VM
+                for id_j in j_group:
+                    self.C.add(self.viable_dict[id_j])
+                    if group:
+                        self.C_types.add((id_j-1)%(self.unit_x_polymer)+1)
+                    ids_to_test.add(id_j)
+                
+               
+                id_i = self.locations_dict[j]
+                i_group = groups[group_dict[id_j]]
+       
+        self.C_size[self.counter] = len(members_in_cluster)
+       # print(self.counter, members_in_cluster)
+        environment = set([self.locations_dict[e_i] for e_i in self.environment]) - members_in_cluster
+        
+        
+       
+        
+        for id_i in members_in_cluster:
+            for id_j in environment:
+                if self.links[id_i,id_j] == -1:
+                    self.move_outcome[self.counter] = -1
+                    self.remove_links(mc=members_in_cluster,me=environment)
+                    
+
+                    return()
+
+        exponent = 0
+        
+        if self.box != None:
+            environment.update({0})
+            
+        #what is missed is the change in i_group bond strengthsself.counter,groups,group_dict,members_in_cluster,environment)
+        
+        #first do cluster-cluster
+        
+        done = set()
+        for id_i in members_in_cluster: #for each separate member in cluster          
+            for id_j in members_in_cluster: #for each other member of the group
+                pair = tuple(sorted([id_i,id_j]))
+                if pair not in done:
+                    done.add(pair)
+                else:
+                    continue #don't get energy
+                calculated_energies = self.current_dE.get(tuple(sorted([id_i,id_j])))
+                
+                if calculated_energies == None: #then have to recalculate it
+                    i = self.viable_dict[id_i]
+                    j = self.viable_dict[id_j]
+
+                    calculated_energies = self.get_energies(i,j,VMM,id_i,id_j)
+
+                    E_ij,E_ipj,E_ipjp,E_ijp = calculated_energies
 
 
+                    E_end = E_ipjp
+                    E_start = E_ij
+                    dE = E_end-E_start
+                else:
+                    dE = calculated_energies[2] - calculated_energies[0]
+                   
+               
+                exponent += dE #to work out whether to even consider the move
+                
+                
+        
+                
+        #then, do members of cluster with environment
+        for id_i in members_in_cluster:
+            
+            for id_j in environment: 
+                
+                if self.links[id_i,id_j] != 0:
+                    
+                    #then it has already been accounted for
+                    self.links[id_i,id_j] = 0 #re-set this one for next round
+                    self.links[id_j,id_i] = 0 #re-set this one for next round
+                    
+                    continue
+                #otherwise need to attend to it
+                calculated_energies = self.current_dE.get(tuple(sorted([id_i,id_j])))
+                
+                if calculated_energies == None: #then have to recalculate it
+                    i = self.viable_dict[id_i]
+                    j = self.viable_dict[id_j]
+
+                    calculated_energies = self.get_energies(i,j,VMM,id_i,id_j)
+
+                    E_ij,E_ipj,E_ipjp,E_ijp = calculated_energies
+                
+                    
+                    E_end = E_ipj
+                    E_start = E_ij
+                    dE = E_end-E_start
+                else:
+                    dE = calculated_energies[1] - calculated_energies[0]
+                   
+               
+                exponent += dE #to work out whether to even consider the move
+             
+        if exponent > 0.1*self.overlap_penalty:
+            factor = 0 #then there is a clash with enviroment so can't pass
+        else:
+            factor = np.exp(min(-self.beta*exponent,0))
+        
+        
+        
+        if np.random.rand() > factor:
+            self.move_outcome[self.counter] = 0
+            self.remove_links(mc=members_in_cluster) #only need to remove the cluster:cluster links
+            
+            return()
+            #since no move happened, all calculated energies are still true for next calculation
+        
+        #NOW - calculate how much the bonds within cluster get worse by.
+        
+        
+        #current neighbour dict needs restoring since a move happens
+        self.current_neighbour_dict = dict() #finished with this
+        
+        for id_i in members_in_cluster: 
+            self.neighbour_dict.pop(id_i, None)
+        for id_j in environment: 
+            self.neighbour_dict.pop(id_j, None)
+        #also need to remove anything that will become a neighbour.
+        #this is anything in C at new position gets new neighbours which we can calculate
+        
+        
+        self.move_outcome[self.counter] = 1
+        
+        #if gets here, no frustrated bonds, therefore nothing is in n<->o and can accept the cluster.
+   
+        new_locations = dict()
+        lc = list(members_in_cluster)
+        for id_i in members_in_cluster:  
+            np.put(self.links[id_i,:],lc,0) #reset only other 0 links
+            
+            #remove any calculated energies associated with this. These are the things we now don't know
+ 
+            i = self.viable_dict[id_i]
+            
+            ip = tuple((i + VMM)%self.d)
+            new_locations[ip] = id_i
+            self.viable_dict[id_i] = ip
+            
+            self.viable -= {i}
+            self.viable.add(ip)
+        
+        
+        
+        for i in self.C:
+            del self.locations_dict[i]
+            
+        self.locations_dict.update(new_locations)
+        
+        #change to the new positions of the cluster
+        self.C = set(new_locations.keys())
+        
+        
+        
+        #get new neighbourhoods of the things around the cluster.
+        #The environment we have now removed, some of that will be put back
+        #but also, neighbours of the cluster
+       
+        
+        
+        for id_i in members_in_cluster:
+            
+            i_neighbours = self.get_neighbours({id_i},group=group)
+            #do the same for each neighbour of the new cluster position
+            
+            for i_n in i_neighbours:
+                self.neighbour_dict.pop(i_n, None)
+
+        
+        
+        return()
+    
+    
+    def remove_links(self,mc=set(),me=set()):
+        
+       
+        #remove all mc:mc, mc:me links
+        for id_i in mc:
+            for id_i2 in mc:
+                self.links[id_i,id_i2] = 0
+            for id_j in me:
+                self.links[id_i,id_j] = 0
+                self.links[id_j,id_i] = 0
+                for id_j2 in me:
+                    self.links[id_j2,id_j] = 0
+                    self.links[id_j,id_j2] = 0
+        
+                
+ 
+
+    def iterate(self,iterations,mode=None,timed=False,Kawasaki_fraction=0,GVMMC_fraction=0,track=True,recognise = False,every = 1,
+               anneal = False,grouping = (1,1,1,1),generate=False,delete=False,delta=0): 
+        
+        
+        #self.electrostatic_modification_matrix()
+        self.every = every
+        
+        
+        self.links = 0*self.links
+        self.delete = delete
+       
+        group = False
+        
+        self.grouping = grouping
+        self.unit_x_polymer = self.grouping[2]*self.grouping[3]
+        
+            
+        
+       
+        self.count_complexes()
+        #self.ncomplexes.pop(self.counter,None) #just to make it track with energies
+        #-------------------------------------------------------
+        
+        b = np.copy(self.beta)  
+        if anneal:
+            self.set_beta(0)
+        iteration = 1
+       # t0 = time.time()
+        
+        self.neighbour_dict = dict()
+        self.environment = set()
+        self.move_types = dict()
+
+        while iteration < iterations:
+            self.viable = set(self.viable_dict.values()) - self.box_loc
+            group = False
+            self.current_neighbour_dict = dict()
+            
+            
+            if generate: 
+                self.generate_new()
+           
+            if len(self.viable)  == 0:
+                #then currently nothing in the system, and nothing will ever be in the system?
+                self.counter += 1
+                iteration += 1
+                continue
+            
+            
+            if anneal:
+                self.set_beta(b*iteration/iterations)
+
+
+            if mode == 'random':
+                self.randomly_sample_states()
+            else:
+                move_type = np.random.rand() < Kawasaki_fraction
+                if move_type:
+                
+                    self.Kawasaki()
+                else:
+                    group = np.random.rand() < GVMMC_fraction
+                    self.VMMC(group=group)
+
+            self.counter += 1
+           
+            self.move_types[self.counter] = (move_type,group)
+          #  if timed:#then do until time reaches iterations. This means that
+            #each lattice site is on average the seed (at least for Kawasaki) iterations times
+           #     dt = 1./(len(self.viable_dict)-1)
+            #    self.global_time += dt #less than 1
+             #   iteration += dt
+            #else:
+            iteration += 1
+
+            
+            if self.counter%self.every == 0:
+
+                if track:
+                    if 0 == 1: #anneal:
+                        
+                        E = self.get_energy()
+                        #make a random step in beta
+                        #old_beta = np.copy(self.beta)
+                        new_beta = max(0,min(self.beta + delta*(1 - 2*np.random.rand()),1))
+                        
+                        E_new = self.get_energy()
+                        #print("Here", self.counter,E,new_beta,self.beta)
+                        if np.random.rand() < np.exp(min(-(new_beta - self.beta)*E,0)):
+                            self.set_beta(new_beta)
+                            #pass
+                        
+                        
+                    self.time[self.counter] = self.global_time
+                    #self.energies[self.counter] = self.get_energy() - self.E0
+                    self.positions[self.counter] = dict(self.viable_dict)
+                    self.count_complexes()
+                    
+                    if mode != 'random' and not move_type:
+                        self.C_size[self.counter] = len(self.C)
+                if recognise:
+                   
+                    self.recognise()
+        #self.set_beta(b)   
+       # t1 = time.time()
+       
+           
+     
