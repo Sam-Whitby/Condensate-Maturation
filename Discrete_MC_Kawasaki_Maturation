@@ -86,23 +86,33 @@ class Kawasaki_Discrete:
             p = 1
             for coord,site in np.ndenumerate(self.lattice):
 
-                dist = np.array(coord) - self.L/2
+                dist = np.array(coord) -  self.L/2
                 if np.dot(dist,dist) <= radius_2:
                     self.lattice[tuple(coord)] = p
-                    self.particle_locations[p] = tuple(coord)
+                   # self.particle_locations[p] = tuple(coord)
                     p += 1
                     if p == particles:
                         break
+                    
 
             x0,y0 = np.where(self.lattice == 0)       
             while p <= particles:
                 r = np.random.randint(len(x0))
                 if self.lattice[x0[r],y0[r]] == 0:
                     self.lattice[x0[r],y0[r]] = p
-                    self.particle_locations[p] = tuple(coord)
+                   # self.particle_locations[p] = tuple(coord)
                     p += 1
             
-        
+            #now translate everything
+            
+            initial_coord = np.array([0,0])
+            self.lattice = np.roll(np.roll(self.lattice,initial_coord[0],axis=0),initial_coord[1],axis=1)
+            
+            for coord,site in np.ndenumerate(self.lattice):
+                if site != 0:
+                    self.particle_locations[site] = tuple(coord)
+            
+            
             
         else:
             print("ERROR - DIMENSION NOT SUPPORTED")
@@ -441,7 +451,7 @@ class Kawasaki_Discrete:
             self.particle_locations[p1] = site2
             
             #lastly update the frame
-            if self.mode != "ps" and self.local:
+            if self.local:
                 if not np.array_equal(adjacent_coordinate,PBC_adjacent_coordinate):
 
 
@@ -497,7 +507,7 @@ class Kawasaki_Discrete:
     def get_COM(self):
         L = self.L
         test_lattice = self.lattice
-
+        COM = np.array([0.,0.])
         
         rolls = dict()
         for axis in [0,1]:
@@ -510,8 +520,12 @@ class Kawasaki_Discrete:
             best = min(possible_arc_lengths, key = possible_arc_lengths.get)
             rolls[axis] = best
             self.rolls = rolls
+            COM[axis] = (possible_COMS[best][axis] - rolls[axis])%self.L
+            #print("a",axis,)
             
-        self.COM = (self.L/2 + np.array([rolls[0],rolls[1]]))%self.L
+        
+        self.COM = COM
+        #print("COM", self.COM)
             
         
     def FRAP(self,radius):
@@ -523,7 +537,13 @@ class Kawasaki_Discrete:
         self.radius = radius
         for coord,site in np.ndenumerate(self.lattice):
             
-            dist = np.array(coord) - self.COM
+            delta = coord - self.COM
+            a_delta = np.abs(delta)
+            dist = np.array([x if 2*ax < self.L else -np.sign(x)*(self.L - ax) for x,ax in zip(delta,a_delta)])
+            
+            #dist = np.minimum(np.array(coord) - self.COM)
+            #need to account for PBC
+            
             if np.dot(dist,dist) <= radius**2:
                 self.bleached[bleach_time].add(site)
         self.lattice_snaps[self.counter] = self.lattice
@@ -536,23 +556,26 @@ class Kawasaki_Discrete:
         fig.set_size_inches(20.5, 5.5)
         fig.suptitle('$\\beta$ = ' + str(self.beta)+', L = ' + str(self.L) + ', D = ' + str(self.D) + ', t = ' + str(self.counter) + ', $J_{min} = $' + str(self.initial_bonding_position) + ', $J_{max} = $' + str(self.max_x)+', states = ' + str(self.max_states), fontsize=16)
         for i,k in zip(range(0,len(axs[0])),list(self.lattice_snaps.keys())):
-            #print(i,k)
-            l = self.lattice_snaps[k] #/(4*self.max_x)
+            #print("ik",i,k,k >= self.bleach_time)
+            l = np.roll(np.roll(self.lattice_snaps[k],self.rolls[0],axis=0),self.rolls[1],axis=1) #/(4*self.max_x)
             if bleached and k >= self.bleach_time:
                 
                 bl = np.zeros_like(l)
                 for c,v in np.ndenumerate(l):
-                    if v not in self.bleached:
+                    if v not in self.bleached[self.bleach_time]:
                         bl[c] = v
                     else:
+                        
                         frame_dist = self.frame_snaps[k][v] - self.frame_snaps[self.bleach_time][v]
+                        #print("HERE",c,v,frame_dist,self.bleached)
                         if np.dot(frame_dist,frame_dist) != 0:
                             bl[c] = v   
             else:
                 bl = l
             axs[0][i].set_title(k)
-            axs[0][i].matshow(-bl,vmin=-1,vmax=0,cmap='Greys')
-            axs[1][i].imshow(-self.energy_snaps[k]/(4*self.max_x),vmin=0,vmax=1)
+            axs[0][i].matshow(((bl == 0) + 0),vmin=0,vmax=1,cmap='Greys')
+            Erolled = np.roll(np.roll(self.energy_snaps[k],self.rolls[0],axis=0),self.rolls[1],axis=1)
+            axs[1][i].imshow(-Erolled/(4*self.max_x),vmin=0,vmax=1)
             axs[0][i].set_axis_off()
             axs[1][i].set_axis_off()
     def plot_FRAP_recovery(self):
@@ -562,7 +585,8 @@ class Kawasaki_Discrete:
         for bleach_time in self.bleach_times:
             self.flu = dict(zip(list(self.lattice_snaps.keys()),[0 for j in list(self.lattice_snaps.keys())]))
             for k in list(self.lattice_snaps.keys()):
-                l = self.lattice_snaps[k]
+                #l = self.lattice_snaps[k]
+                l = np.roll(np.roll(self.lattice_snaps[k],self.rolls[0],axis=0),self.rolls[1],axis=1)
                 for coord,site in np.ndenumerate(l):
 
                     dist = np.array(coord) - self.L/2
