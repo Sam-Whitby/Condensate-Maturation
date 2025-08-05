@@ -7,6 +7,9 @@ class Kawasaki_Discrete:
     
     def __init__(self,beta=1,dimension=1,particles=2,L=5,seed=0,max_x = 0,D=1,
                 min_x = 0,states=None,probs=None):
+        
+        
+        
         self.directions_dict = dict()
         self.radius = L**2 #big enough so never a prob
         self.bleached = {}
@@ -22,6 +25,7 @@ class Kawasaki_Discrete:
         self.L = L
         self.counter = 0
         self.initial_bonding_position = min_x
+        self.COM = (self.L/2 + np.array([0,0]))%self.L
         
         
         #we have x positions. Initial, final and the rest equally distributed.
@@ -490,23 +494,43 @@ class Kawasaki_Discrete:
             else:
                 return(bl != 0)
         
+    def get_COM(self):
+        L = self.L
+        test_lattice = self.lattice
+
+        
+        rolls = dict()
+        for axis in [0,1]:
+            possible_particle_coordinates = {i:np.array(np.where(np.roll(test_lattice,i,axis=axis) != 0)).T for i in range(0,L)}
+
+            possible_COMS = {i:np.sum(p,axis=0)/len(p) for i,p in possible_particle_coordinates.items()}
+
+            possible_arc_lengths = {i:np.sum([np.dot(z,z) for z in possible_COMS[i]-possible_particle_coordinates[i]]) for i in possible_particle_coordinates.keys()}
+
+            best = min(possible_arc_lengths, key = possible_arc_lengths.get)
+            rolls[axis] = best
+            self.rolls = rolls
             
+        self.COM = (self.L/2 + np.array([rolls[0],rolls[1]]))%self.L
             
         
     def FRAP(self,radius):
+        self.get_COM()
         bleach_time = self.counter
+        self.bleach_time = bleach_time
         self.bleach_times.append(bleach_time)
         self.bleached[bleach_time] = set()
         self.radius = radius
         for coord,site in np.ndenumerate(self.lattice):
             
-            dist = np.array(coord) - self.L/2
+            dist = np.array(coord) - self.COM
             if np.dot(dist,dist) <= radius**2:
                 self.bleached[bleach_time].add(site)
         self.lattice_snaps[self.counter] = self.lattice
         self.frame_snaps[self.counter] = {k: np.array(v) for k, v in self.frame.items()}
         
     def history(self,bleached=False):
+        import matplotlib.pyplot as plt
         #print(self.lattice_snaps.keys())
         fig,axs = plt.subplots(2,len(self.lattice_snaps.keys()))
         fig.set_size_inches(20.5, 5.5)
@@ -605,56 +629,6 @@ class Kawasaki_Discrete:
             self.counter += 1
         #self.counter -= 1
             
-            
-from Condensate_Maturation_Orv import *
-import numpy as np
-#import matplotlib.pyplot as plt
-L = 50
-
-a = Kawasaki_Discrete(L=L,dimension=2,beta=1,particles=1000,
-                      seed = 1,D=0,
-                      states=1,min_x=2.0,max_x = 4.2,
-                     probs = 'first')
-import time
-#equilibrate
-t = time.time()
-a.beta = 1
-a.iterate(iterations = 200000,snaps=10,mode='ps',local=False)
-print("DONE1",a.mode,time.time() - t)
-#a.beta = 0
-a.beta = 0
-a.iterate(iterations = 200000,snaps=10,local=False,mode='ps')
-print("DONE2",a.mode,time.time() - t)
-a.beta = 1
-a.iterate(iterations = 200000,snaps=10,local=False,mode='ps')
-print("DONE3",a.mode,time.time() - t)
-#a.iterate(iterations = 10,snaps=5)
-#print("DONE2",a.mode)
-
-#a.beta = 1
-#a.iterate(iterations = 1000000,snaps=50)
-#a.FRAP(100)
-#print("THERE")
-#a.iterate(iterations = 1000000,snaps=50)
-#a.iterate(iterations = 100,snaps=5)
-#a.iterate(iterations = 1000,snaps=5)
-
-#a.iterate(iterations = 1000,snaps=5)
-#a.FRAP(3)
-#a.iterate(iterations = 1000,snaps=3)
-#a.iterate(iterations = 10000,snaps=2)
-
-#a.show(bleached=True)
-#a.history(bleached=False)
-#
-#print(a.results)
-#data = a.plot_FRAP_recovery()
-#print(data)
-#print(a.results)
-#a.history(bleached=True)
-#plt.plot(a.results.keys(),np.array(list(a.results.values())))
-#swaps = np.array([np.sum(list(a.swaps.values())[0:i]) for i in range(0,len(a.swaps.keys()))])
-#plt.plot(a.swaps.keys(),swaps)
-#a.compare_Boltzmann()
+  
 
 
