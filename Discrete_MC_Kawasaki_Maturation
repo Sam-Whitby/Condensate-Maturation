@@ -27,6 +27,7 @@ class Kawasaki_Discrete:
         self.initial_bonding_position = min_x
         self.COM = (self.L/2 + np.array([0,0]))%self.L
         self.rolls = {0:0,1:0}
+        self.first_FRAP = True
         
         #we have x positions. Initial, final and the rest equally distributed.
         #solution: make a dictionary that maps the integers to (linearly distb) states
@@ -532,22 +533,25 @@ class Kawasaki_Discrete:
             
         
     def FRAP(self,radius):
-        self.get_COM()
         
-        #now roll the lattice and positions
-        
-        self.lattice = np.roll(np.roll(self.lattice,self.rolls[0],axis=0),self.rolls[1],axis=1)
-        
-        for coord,site in np.ndenumerate(self.lattice):
-                if site != 0:
-                    self.particle_locations[site] = tuple(coord)
-                    
-        #also flip all previous things 
-        
-        for k,l in self.lattice_snaps.items():
-            
-            self.lattice_snaps[k] = np.roll(np.roll(self.lattice_snaps[k],self.rolls[0],axis=0),self.rolls[1],axis=1)
-            self.energy_snaps[k] = np.roll(np.roll(self.energy_snaps[k],self.rolls[0],axis=0),self.rolls[1],axis=1)
+        if self.first_FRAP:
+            self.first_FRAP = False
+            self.get_COM()
+
+            #now roll the lattice and positions
+
+            self.lattice = np.roll(np.roll(self.lattice,self.rolls[0],axis=0),self.rolls[1],axis=1)
+
+            for coord,site in np.ndenumerate(self.lattice):
+                    if site != 0:
+                        self.particle_locations[site] = tuple(coord)
+
+            #also flip all previous things 
+
+            for k,l in self.lattice_snaps.items():
+
+                self.lattice_snaps[k] = np.roll(np.roll(self.lattice_snaps[k],self.rolls[0],axis=0),self.rolls[1],axis=1)
+                self.energy_snaps[k] = np.roll(np.roll(self.energy_snaps[k],self.rolls[0],axis=0),self.rolls[1],axis=1)
             
             
             
@@ -575,32 +579,36 @@ class Kawasaki_Discrete:
     def history(self,bleached=False):
         import matplotlib.pyplot as plt
         #print(self.lattice_snaps.keys())
-        fig,axs = plt.subplots(2,len(self.lattice_snaps.keys()))
+        fig,axs = plt.subplots(1 + len(self.bleach_times),len(self.lattice_snaps.keys()))
         fig.set_size_inches(20.5, 5.5)
         fig.suptitle('$\\beta$ = ' + str(self.beta)+', L = ' + str(self.L) + ', D = ' + str(self.D) + ', t = ' + str(self.counter) + ', $J_{min} = $' + str(self.initial_bonding_position) + ', $J_{max} = $' + str(self.max_x)+', states = ' + str(self.max_states), fontsize=16)
-        for i,k in zip(range(0,len(axs[0])),list(self.lattice_snaps.keys())):
-            #print("ik",i,k,k >= self.bleach_time)
-            l = self.lattice_snaps[k] #np.roll(np.roll(,self.rolls[0],axis=0),self.rolls[1],axis=1) #/(4*self.max_x)
-            if bleached and k >= self.bleach_time:
-                
-                bl = np.zeros_like(l)
-                for c,v in np.ndenumerate(l):
-                    if v not in self.bleached[self.bleach_time]:
-                        bl[c] = v
-                    else:
-                        
-                        frame_dist = self.frame_snaps[k][v] - self.frame_snaps[self.bleach_time][v]
-                        #print("HERE",c,v,frame_dist,self.bleached)
-                        if np.dot(frame_dist,frame_dist) != 0:
-                            bl[c] = v   
-            else:
-                bl = l
-            axs[0][i].set_title(k)
-            axs[0][i].matshow(((bl == 0) + 0),vmin=0,vmax=1,cmap='Greys')
-            #Erolled = np.roll(np.roll(self.energy_snaps[k],self.rolls[0],axis=0),self.rolls[1],axis=1)
-            axs[1][i].imshow(-self.energy_snaps[k]/(4*self.max_x),vmin=0,vmax=1)
-            axs[0][i].set_axis_off()
-            axs[1][i].set_axis_off()
+        for b in range(0,len(self.bleach_times)):
+            bleach_time = self.bleach_times[b]
+            for i,k in zip(range(0,len(axs[0])),list(self.lattice_snaps.keys())):
+                #print("ik",i,k,k >= self.bleach_time)
+                l = self.lattice_snaps[k] #np.roll(np.roll(,self.rolls[0],axis=0),self.rolls[1],axis=1) #/(4*self.max_x)
+                if bleached and k >= bleach_time:
+
+                    bl = np.zeros_like(l)
+                    for c,v in np.ndenumerate(l):
+                        if v not in self.bleached[bleach_time]:
+                            bl[c] = v
+                        else:
+
+                            frame_dist = self.frame_snaps[k][v] - self.frame_snaps[bleach_time][v]
+                            #print("HERE",c,v,frame_dist,self.bleached)
+                            if np.dot(frame_dist,frame_dist) != 0:
+                                bl[c] = v   
+                else:
+                    bl = l
+                axs[b][i].set_title(k)
+                axs[b][i].matshow(((bl == 0) + 0),vmin=0,vmax=1,cmap='Greys')
+                axs[b][i].set_axis_off()
+                #Erolled = np.roll(np.roll(self.energy_snaps[k],self.rolls[0],axis=0),self.rolls[1],axis=1)
+            for i,k in zip(range(0,len(axs[0])),list(self.energy_snaps.keys())):
+                axs[len(self.bleach_times)][i].imshow(-self.energy_snaps[k]/(4*self.max_x),vmin=0,vmax=1)
+            
+                axs[len(self.bleach_times)][i].set_axis_off()
     def plot_FRAP_recovery(self):
         #get the amount of fluorescence in the radius
         #
