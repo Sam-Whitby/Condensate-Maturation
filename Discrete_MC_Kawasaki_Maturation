@@ -303,18 +303,18 @@ class Kawasaki_Discrete:
         p1,p2 = pair
 
         old = np.copy(self.position[p1,p2])
-        old_bond_E = -self.J[p1,p2]*self.position_energy_map[self.position[p1,p2]]
+        old_bond_E = self.J[p1,p2]*self.position_energy_map[self.position[p1,p2]]
        # new = np.random.randint(self.max_x+1)
         dx = np.random.choice([-1,1])
         new = min(max(old + dx,self.initial_bonding_position),self.initial_bonding_position+self.max_states-1)
         
         self.position[p1,p2] = new
         self.position[p2,p1] = new
-        new_bond_E = - self.J[p1,p2]*self.position_energy_map[self.position[p1,p2]]
+        new_bond_E = self.J[p1,p2]*self.position_energy_map[self.position[p1,p2]]
         
         
         new_E = self.E - old_bond_E + new_bond_E # self.total_energy()
-        new_E = self.total_energy()
+       # new_E = self.total_energy()
         
         if np.random.rand() < np.exp(-self.beta*(new_E - self.E)):
             self.E = new_E
@@ -388,20 +388,28 @@ class Kawasaki_Discrete:
             site1_env = [self.lattice[tuple((site1+self.neighbours[n_id])%self.L)] for n_id in self.neighbour_ids[0:]]
             site2_env = [self.lattice[tuple((site2-self.neighbours[n_id])%self.L)] for n_id in self.neighbour_ids[0:]]
             
-      
+        
    
         site1_bonds = [int(self.position[self.lattice[site1],p]) for p in site1_env]
         site2_bonds = [int(self.position[self.lattice[site2],p]) for p in site2_env]
+        
+        #site1_energies = [self.J[self.lattice[site1],p]*int(self.position[self.lattice[site1],p]) for p in site1_env]
+        #site2_energies = [self.J[self.lattice[site2],p]*int(self.position[self.lattice[site2],p]) for p in site2_env]
         
         pp_interaction = [np.sign(self.lattice[site1])*np.sign(p) for p in site1_env] + [np.sign(self.lattice[site2])*np.sign(p) for p in site2_env]
         pp_interaction_bool = [bool(p) for p in pp_interaction]
         #print("pp_interaction_bool",site1,site2,site1_bonds,site2_bonds)
         
         bond_list = site1_bonds+site2_bonds
+        bond_E = [self.J[self.lattice[site1],p] for p in site1_env] + [self.J[self.lattice[site2],p] for p in site2_env]
+        #print("BC", bond_E)
+        #bond_energies_list = 
+        
         
         
         pp_bonds = list(compress(bond_list, pp_interaction_bool))
-        #print("GIVES", self.counter,pp_bonds)
+        pp_E = list(compress(bond_E, pp_interaction_bool))
+        #print("GIVES", self.counter,pp_bonds,pp_E)
         
         outcome_count = [pp_bonds.count(v) for v in self.possible_positions]
         
@@ -418,8 +426,8 @@ class Kawasaki_Discrete:
         
         x_new = np.random.choice(self.possible_positions,len(bond_list),p=self.acceptance_probabilities)
         
-        dE = np.sum([self.J[p]*self.position_energy_map[p] for p in pp_bonds])
-       # print("NEW", x_new,dE)
+        dE = np.sum([-E*self.position_energy_map[p] for p,E in zip(pp_bonds,pp_E)])
+        #print("NEW", pp_bonds,dE,site1_env,site2_env)
        
         p1 = self.lattice[site1]
         p2 = self.lattice[site2]
@@ -434,7 +442,7 @@ class Kawasaki_Discrete:
             self.position[p_env,p2] = self.position[p2,p_env]
             
             
-            dE -= self.J[p2,p_env]*self.position_energy_map[self.position[p2,p_env]]*np.sign(p2)*np.sign(p_env)
+            dE += self.J[p2,p_env]*self.position_energy_map[self.position[p2,p_env]]*np.sign(p2)*np.sign(p_env)
             v += 1
             
      
@@ -445,7 +453,7 @@ class Kawasaki_Discrete:
             self.position[p_env,p1] = self.position[p1,p_env]
             #print("ADDING", p1,p_env,)
            
-            dE -= self.J[p1,p_env]*self.position_energy_map[self.position[p1,p_env]]*np.sign(p1)*np.sign(p_env)
+            dE += self.J[p1,p_env]*self.position_energy_map[self.position[p1,p_env]]*np.sign(p1)*np.sign(p_env)
             v += 1
        # print("DE ",dE)
         temp = np.copy(self.lattice[tuple(site1)])
@@ -453,8 +461,9 @@ class Kawasaki_Discrete:
         self.lattice[tuple(site2)] = temp
         
         E_after = (self.E+dE)
-        E_after = self.total_energy()
         
+        #E_after = self.total_energy()
+        #print("COMP",self.counter,self.E+dE, E_after)
        
        # print("S1S2", site1,site2,direction,E_after,self.E)
         
