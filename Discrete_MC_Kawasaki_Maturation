@@ -6,9 +6,11 @@ class Kawasaki_Discrete:
    
     
     def __init__(self,beta=1,dimension=1,particles=2,L=5,seed=0,max_x = 0,D=1,
-                min_x = 0,states=None,probs=None,initial_state='gas',dev=0):
-        
-        
+                min_x = 0,states=None,probs=None,initial_state='gas',dev=0,
+                initial_droplet_radius = None,CF_Method = False):
+        self.BM = False
+        self.CF_Method = CF_Method
+        self.initial_droplet_radius = initial_droplet_radius
         self.initial_state = initial_state
         self.directions_dict = dict()
         self.radius = L**2 #big enough so never a prob
@@ -24,7 +26,9 @@ class Kawasaki_Discrete:
         self.beta= beta
         self.L = L
         self.counter = 0
+        
         self.initial_bonding_position = min_x
+        
         self.COM = (self.L/2 + np.array([0,0]))%self.L
         self.rolls = {0:0,1:0}
         self.first_FRAP = True
@@ -41,24 +45,42 @@ class Kawasaki_Discrete:
         self.acceptance_probabilities = [1] + [0]*(self.max_states-1)
         
         
+        
         if 0 not in state_J:
             self.acceptance_probabilities = [0] + self.acceptance_probabilities
             state_J = [0] + state_J
+            
+        
         self.position_energy_map = dict(zip([i for i in range(0,len(state_J))],state_J))
-
+        print("SJ",self.position_energy_map)
         self.possible_positions = list(self.position_energy_map.keys())
         
-       
+         #min_x
         
         if probs == "uniform":
-            self.acceptance_probabilities = [1./(self.max_states)]*self.max_states
-        #elif probs == "first":
+            self.acceptance_probabilities = [1./(len(self.acceptance_probabilities))]*len(self.acceptance_probabilities)
+        elif probs == "first":
             
             
-          #  self.acceptance_probabilities = [1] + [0]*(self.max_states-1)
-        
-       
-        radius_2 = int(particles/np.pi)
+            self.acceptance_probabilities = [a*0 for a in self.acceptance_probabilities] #[1] + [0]*(self.max_states-1)
+            self.acceptance_probabilities[1] = 1
+            
+        elif probs == "random":
+            random_probs = np.random.rand(len(self.acceptance_probabilities))
+            if 0 not in state_J:
+                random_probs[0] = 0
+            self.acceptance_probabilities = random_probs/np.sum(random_probs)
+            
+            
+       # print("SA",self.acceptance_probabilities)
+        if self.initial_droplet_radius == None:
+            radius_2 = int(particles/np.pi)
+            droplet_particles=particles
+        else:
+            radius_2 = self.initial_droplet_radius**2
+            droplet_particles = int(np.pi*radius_2)
+            
+            
         #first get the radius
         p = 1
         
@@ -69,7 +91,7 @@ class Kawasaki_Discrete:
         
         self.dev = dev
         
-        self.J = self.dev*np.random.randn(particles+1,particles+1)
+        self.J =  -1 + self.dev*np.random.randn(particles+1,particles+1)
         self.J = np.tril(self.J,-1)
         self.J += self.J.T
 
@@ -102,13 +124,14 @@ class Kawasaki_Discrete:
             p = 1
             if initial_state != 'gas':
                 for coord,site in np.ndenumerate(self.lattice):
-
+                    
                     dist = np.array(coord) -  self.L/2
                     if np.dot(dist,dist) <= radius_2:
+                       # print("HERE", coord,site)
                         self.lattice[tuple(coord)] = p
                        # self.particle_locations[p] = tuple(coord)
                         p += 1
-                        if p == particles:
+                        if p == droplet_particles:
                             break
                     
 
@@ -122,7 +145,7 @@ class Kawasaki_Discrete:
             
             #now translate everything
             
-            initial_coord = np.array([15,-10])
+            initial_coord = np.array([0,0])
             self.lattice = np.roll(np.roll(self.lattice,initial_coord[0],axis=0),initial_coord[1],axis=1)
             
             for coord,site in np.ndenumerate(self.lattice):
@@ -188,25 +211,33 @@ class Kawasaki_Discrete:
             degeneracy_unbonded = 0
         degeneracy_bonded = (arrangements - degeneracy_unbonded)
         print("AUB",arrangements,degeneracy_unbonded,degeneracy_bonded)
+        
+            
+       # print("HERE", set(list(self.position_energy_map.values())))
+     #   print("HERE", set(data))
+        energy_values = list([-s for s in self.position_energy_map.values()])  # set(data).union(to_add)
+        print("EV",energy_values)
         if degeneracy_unbonded > 0:
-            to_add = {0}
-        else:
-            to_add = set()
-        energy_values = set(data).union(to_add)
-
+            if 0 not in energy_values:
+                energy_values += [0]
+        unique, counts = np.unique(energy_values, return_counts=True)
+        energy_counts = dict(zip(unique, counts)) #this contains the degeneracy of each energy
+      #  print("THERE",energy_values)
         #bonded is 0 or 1
         #unbonded is not all the things that are 0
 
-        for x in energy_values:
+        for x,count in energy_counts.items():
+            #x = energy_values[i]
+            
             print("x=",x,(x >=  self.position_energy_map[self.initial_bonding_position]),degeneracy_bonded,np.exp(-self.beta*x),(x==0)*degeneracy_unbonded)
             
             #what I mean is - if initial_bonding position is 0,
             #we include all energies. Otherwise, the 0 energy one only
             #contributes to unbonded
             if self.initial_bonding_position == 0:
-                theoretical_results[x] = degeneracy_bonded*np.exp(-self.beta*x) + (x==0)*degeneracy_unbonded
+                theoretical_results[x] = count*(degeneracy_bonded*np.exp(-self.beta*x) + (x==0)*degeneracy_unbonded)
             else:
-                theoretical_results[x] = (x != 0)*degeneracy_bonded*np.exp(-self.beta*x) + (x==0)*degeneracy_unbonded
+                theoretical_results[x] = count*((x != 0)*degeneracy_bonded*np.exp(-self.beta*x) + (x==0)*degeneracy_unbonded)
                 
                 
            
@@ -224,13 +255,66 @@ class Kawasaki_Discrete:
             r = np.sum(data == x)/count
 
             sim_results[x] = r
+            
+            
+            
+        import matplotlib as mpl
+        import matplotlib.pylab as pl
+        cmap = pl.cm.Blues_r
+        cmaplist = [cmap(i) for i in range(cmap.N)]
+
+        # create the new map
+        cmap = mpl.colors.LinearSegmentedColormap.from_list(
+            'Custom cmap', cmaplist, cmap.N)
+        
 
         sim_Z = np.sum(list(sim_results.values()))
         sim_results = dict(zip(sim_results.keys(),(1./sim_Z)*np.array(list(sim_results.values()))))
         print("ST",sim_results,theoretical_results)
-        plt.scatter(theoretical_results.values(),sim_results.values())
+        
+        xvals = np.array(sorted(set(energy_values))[::-1])
+        
+        #plt.plot(sorted(list(theoretical_results.values())), sorted(list(theoretical_results.values())),ls='dashed',c='black')
+        pl.plot([0,1],[0,1],ls='dashed',c='black')
+        #for E in energy_values:
+         #   plt.text(theoretical_results[E], sim_results[E],str(int(-E)) + '$\\beta$')
+        pl.xlabel("Boltzmann Prediction")
+        pl.ylabel("Simulation Results")
+      #  plt.legend(["E = " + str(int(E)) + '$\\beta$' for E in sorted(energy_values)[::-1]])
+        pl.gca().set_aspect('equal')
+        
+        
+        #  xvals = np.linspace(0,5,6)
+        # define the bins and normalize
+        bounds = np.linspace(-len(xvals),0 , len(xvals)+1)
+        norm = mpl.colors.BoundaryNorm(bounds, cmap.N)
+
+        #print(bounds)
+        
+        
+        for E in xvals:
+            
+           # plt.scatter(theoretical_results[E],sim_results[E],s=100) #,c='black')
+            
+            pl.scatter(theoretical_results[E],sim_results[E],c=E-1,cmap=cmap,norm=norm,edgecolor='black',s=200)
          #sim_results.keys()))
-        plt.plot(theoretical_results.values(), theoretical_results.values())
+        
+        
+        
+        
+      
+
+        
+        ax2 = pl.gcf().add_axes([0.95, 0.1, 0.03, 0.8])
+        cb = mpl.colorbar.ColorbarBase(ax2, cmap=cmap, norm=norm,
+            spacing='proportional', ticks=bounds, boundaries=bounds, format='%1i')
+
+        ax2.set_yticks(xvals - 0.5, minor=False)
+        cb.ax.set_yticklabels([str(int(E)) + '$ \\beta $' for E in xvals])
+        
+        
+        
+        #----
         
         
     def draw_energies(self):
@@ -260,6 +344,7 @@ class Kawasaki_Discrete:
     def total_energy(self):
         E = 0
         pairs = self.get_pairs()
+        
         for pair in pairs:
             p1,p2 = pair
         
@@ -306,6 +391,10 @@ class Kawasaki_Discrete:
         old_bond_E = self.J[p1,p2]*self.position_energy_map[self.position[p1,p2]]
        # new = np.random.randint(self.max_x+1)
         dx = np.random.choice([-1,1])
+   #     if self.CF_Method:
+        #dx = np.abs(dx) #can only increase
+    
+    
         new = min(max(old + dx,self.initial_bonding_position),self.initial_bonding_position+self.max_states-1)
         
         self.position[p1,p2] = new
@@ -339,7 +428,11 @@ class Kawasaki_Discrete:
         np.random.shuffle(self.neighbour_ids)
         
         direction_id = self.neighbour_ids[0]
-        
+        self.directions_dict[self.counter] = np.zeros(2)
+        #if self.BM:
+            
+            #self.directions_dict[self.counter] = self.neighbours[direction_id]
+            #return()
         
         
         
@@ -366,7 +459,7 @@ class Kawasaki_Discrete:
             PBC_adjacent_coordinate = adjacent_coordinate%self.L
             
             site2 = tuple(PBC_adjacent_coordinate)
-        self.directions_dict[self.counter] = direction
+        
 
         
         
@@ -398,7 +491,10 @@ class Kawasaki_Discrete:
         
         pp_interaction = [np.sign(self.lattice[site1])*np.sign(p) for p in site1_env] + [np.sign(self.lattice[site2])*np.sign(p) for p in site2_env]
         pp_interaction_bool = [bool(p) for p in pp_interaction]
-        #print("pp_interaction_bool",site1,site2,site1_bonds,site2_bonds)
+        
+        #print(self.counter,"pp_interaction_bool",self.lattice[site1],self.lattice[site2],site1_env,site2_env,site1_bonds,site2_bonds,pp_interaction_bool)
+        
+    
         
         bond_list = site1_bonds+site2_bonds
         bond_E = [self.J[self.lattice[site1],p] for p in site1_env] + [self.J[self.lattice[site2],p] for p in site2_env]
@@ -414,15 +510,19 @@ class Kawasaki_Discrete:
         outcome_count = [pp_bonds.count(v) for v in self.possible_positions]
         
         p = multinomial.pmf(outcome_count, n=len(pp_bonds), p=self.acceptance_probabilities)
-        
+        #print(self.position)
+        #print(self.counter,"OC",outcome_count,"p",p,pp_bonds,pp_E)
         if p < np.random.rand():
-            return()
+            #print("ERROR!")
+            if not self.CF_Method:
+                
+                return() #to obey detailed balance!
         
         #the positions that will be altered: site1:site1_env and 
         
         #old_positions = np.copy(self.position)
         
-      
+        
         
         x_new = np.random.choice(self.possible_positions,len(bond_list),p=self.acceptance_probabilities)
         
@@ -438,24 +538,27 @@ class Kawasaki_Discrete:
             #reset old to 0, get new
             self.position[p1,p_env] = 0
             self.position[p_env,p1] = 0
+        for p_env in site2_env:
+            self.position[p2,p_env] = 0
+            self.position[p_env,p2] = 0
+            
+        for p_env in site1_env:
             self.position[p2,p_env] = x_new[v]*np.sign(p2)*np.sign(p_env)
             self.position[p_env,p2] = self.position[p2,p_env]
             
             
             dE += self.J[p2,p_env]*self.position_energy_map[self.position[p2,p_env]]*np.sign(p2)*np.sign(p_env)
             v += 1
-            
-     
+       
+        
         for p_env in site2_env:
-            self.position[p2,p_env] = 0
-            self.position[p_env,p2] = 0
             self.position[p1,p_env] = x_new[v]*np.sign(p1)*np.sign(p_env)
             self.position[p_env,p1] = self.position[p1,p_env]
             #print("ADDING", p1,p_env,)
-           
+            
             dE += self.J[p1,p_env]*self.position_energy_map[self.position[p1,p_env]]*np.sign(p1)*np.sign(p_env)
             v += 1
-       # print("DE ",dE)
+        
         temp = np.copy(self.lattice[tuple(site1)])
         self.lattice[tuple(site1)] = self.lattice[tuple(site2)]
         self.lattice[tuple(site2)] = temp
@@ -468,7 +571,8 @@ class Kawasaki_Discrete:
        # print("S1S2", site1,site2,direction,E_after,self.E)
         
         if np.random.rand() < min(np.exp(-self.beta*(E_after - self.E)),1):
-            
+            #if particle == 1:
+            self.directions_dict[self.counter] = self.neighbours[direction_id] #at equilibrium so all particles count
             #swap occurs
             self.E = E_after
             self.swaps[self.counter] = 1
@@ -685,6 +789,8 @@ class Kawasaki_Discrete:
      
     
     def iterate(self,iterations=0,snaps=0,mode=None,anneal=False,local=True):
+        
+        #prev_loc = self.
         if snaps > 1:
             every = int(iterations/(snaps-1))
         elif snaps == 1:
@@ -703,7 +809,7 @@ class Kawasaki_Discrete:
             if anneal:
                 self.beta = iteration/iterations
             if not local:
-                self.local = np.random.choice([True,False])
+                self.local = False #np.random.choice([True,False])
             else:
                 self.local = True
             
@@ -714,6 +820,7 @@ class Kawasaki_Discrete:
                 self.lattice_snaps[self.counter] = np.copy(self.lattice) 
                 self.energy_snaps[self.counter] = self.draw_energies()
                 self.frame_snaps[self.counter] = {k: np.array(v) for k, v in self.frame.items()}
+                
             self.swaps[self.counter] = 0
             self.Kawasaki()
            
