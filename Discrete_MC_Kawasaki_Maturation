@@ -2,16 +2,24 @@ import math
 from itertools import compress
 from scipy.stats import multinomial
 import numpy as np
+
+
+def moving_average(x, w):
+    return np.convolve(x, np.ones(w), 'valid') / w
+
+
 class Kawasaki_Discrete:
    
     
     def __init__(self,beta=1,dimension=1,particles=2,L=5,seed=0,max_x = 0,D=1,
                 min_x = 0,states=None,probs=None,initial_state='gas',dev=0,
                 initial_droplet_radius = None,CF_Method = False):
+        self.show = True
         self.BM = False
         self.CF_Method = CF_Method
         self.initial_droplet_radius = initial_droplet_radius
         self.initial_state = initial_state
+        
         self.directions_dict = dict()
         self.radius = L**2 #big enough so never a prob
         self.bleached = {}
@@ -26,6 +34,7 @@ class Kawasaki_Discrete:
         self.beta= beta
         self.L = L
         self.counter = 0
+        self.position_snaps = dict()
         
         self.initial_bonding_position = min_x
         
@@ -52,13 +61,13 @@ class Kawasaki_Discrete:
             
         
         self.position_energy_map = dict(zip([i for i in range(0,len(state_J))],state_J))
-        print("SJ",self.position_energy_map)
+        #print("SJ",self.position_energy_map)
         self.possible_positions = list(self.position_energy_map.keys())
         
          #min_x
         
         if probs == "uniform":
-            self.acceptance_probabilities = [1./(len(self.acceptance_probabilities))]*len(self.acceptance_probabilities)
+            self.acceptance_probabilities = [0] + [1./(len(self.acceptance_probabilities)-1)]*(len(self.acceptance_probabilities)-1)
         elif probs == "first":
             
             
@@ -116,8 +125,8 @@ class Kawasaki_Discrete:
         elif self.dimensions == 2:
             self.lattice = np.zeros((self.L,self.L),dtype=int)
             self.neighbours = [np.array([-1,0]),
-                           np.array([1,0]),
                            np.array([0,1]),
+                           np.array([1,0]),
                            np.array([0,-1])]
             self.neighbour_ids = np.array([0,1,2,3])
             
@@ -178,14 +187,24 @@ class Kawasaki_Discrete:
         pairs = self.get_pairs()
         for pair in pairs:
             p1,p2 = pair
-            self.position[p1,p2] = self.initial_bonding_position #self.max_x
-            self.position[p2,p1] = self.initial_bonding_position #self.max_x 
+            if probs == 'uniform':
+                #generate a random position
+                position = np.random.choice(self.possible_positions[1:])
+            else:
+                position = self.initial_bonding_position
+            self.position[p1,p2] = position #self.max_x
+            self.position[p2,p1] = position  #self.max_x 
+            
+        #print("GIVES")
+        self.position_snaps[0] = self.position
+        #print(self.position)
         self.results = dict()
         self.pair_count = dict()
         self.D = D
         self.swaps = dict()
         
         self.lattice_snaps = dict()
+        self.lattice_snaps[0] = self.lattice
         self.E = self.total_energy()
         
         
@@ -210,13 +229,14 @@ class Kawasaki_Discrete:
         else:
             degeneracy_unbonded = 0
         degeneracy_bonded = (arrangements - degeneracy_unbonded)
-        print("AUB",arrangements,degeneracy_unbonded,degeneracy_bonded)
+        if self.show:
+            print("AUB",arrangements,degeneracy_unbonded,degeneracy_bonded)
         
             
        # print("HERE", set(list(self.position_energy_map.values())))
      #   print("HERE", set(data))
         energy_values = list([-s for s in self.position_energy_map.values()])  # set(data).union(to_add)
-        print("EV",energy_values)
+        #print("EV",energy_values)
         if degeneracy_unbonded > 0:
             if 0 not in energy_values:
                 energy_values += [0]
@@ -228,8 +248,8 @@ class Kawasaki_Discrete:
 
         for x,count in energy_counts.items():
             #x = energy_values[i]
-            
-            print("x=",x,(x >=  self.position_energy_map[self.initial_bonding_position]),degeneracy_bonded,np.exp(-self.beta*x),(x==0)*degeneracy_unbonded)
+            if self.show:
+                print("x=",x,(x >=  self.position_energy_map[self.initial_bonding_position]),degeneracy_bonded,np.exp(-self.beta*x),(x==0)*degeneracy_unbonded)
             
             #what I mean is - if initial_bonding position is 0,
             #we include all energies. Otherwise, the 0 energy one only
@@ -270,6 +290,9 @@ class Kawasaki_Discrete:
 
         sim_Z = np.sum(list(sim_results.values()))
         sim_results = dict(zip(sim_results.keys(),(1./sim_Z)*np.array(list(sim_results.values()))))
+        
+        if not self.show:
+            return(sim_results,theoretical_results)
         print("ST",sim_results,theoretical_results)
         
         xvals = np.array(sorted(set(energy_values))[::-1])
@@ -381,8 +404,8 @@ class Kawasaki_Discrete:
         
         
         #calculate if diffuses or not
-        if np.random.rand() > self.D:
-            return()
+     #   if np.random.rand() > self.D:
+     #       return()
         
         pair = list(self.pairs)[np.random.randint(len(self.pairs))]
         p1,p2 = pair
@@ -391,17 +414,22 @@ class Kawasaki_Discrete:
         old_bond_E = self.J[p1,p2]*self.position_energy_map[self.position[p1,p2]]
        # new = np.random.randint(self.max_x+1)
         dx = np.random.choice([-1,1])
-   #     if self.CF_Method:
-        #dx = np.abs(dx) #can only increase
+        
+        if self.CF_Method:
+            dx = np.abs(dx) #can only increase
     
     
         new = min(max(old + dx,self.initial_bonding_position),self.initial_bonding_position+self.max_states-1)
+        
+        
+        
+   #     new = np.random.choice(np.array(list(set(list(self.position_energy_map.keys())) - {0})))
         
         self.position[p1,p2] = new
         self.position[p2,p1] = new
         new_bond_E = self.J[p1,p2]*self.position_energy_map[self.position[p1,p2]]
         
-        
+       
         new_E = self.E - old_bond_E + new_bond_E # self.total_energy()
        # new_E = self.total_energy()
         
@@ -429,6 +457,8 @@ class Kawasaki_Discrete:
         
         direction_id = self.neighbour_ids[0]
         self.directions_dict[self.counter] = np.zeros(2)
+        
+        
         #if self.BM:
             
             #self.directions_dict[self.counter] = self.neighbours[direction_id]
@@ -450,6 +480,8 @@ class Kawasaki_Discrete:
             PBC_adjacent_coordinate = adjacent_coordinate%self.L
             site2 = tuple(PBC_adjacent_coordinate)
             
+            reverse_direction = direction = (direction_id+2)%4
+            
         else:
             #make sure big enough
             if self.L -2 <= 2:
@@ -461,6 +493,7 @@ class Kawasaki_Discrete:
             site2 = tuple(PBC_adjacent_coordinate)
         
 
+        other_particle = self.lattice[site2]
         
         
         if self.mode == "ps":
@@ -573,6 +606,8 @@ class Kawasaki_Discrete:
         if np.random.rand() < min(np.exp(-self.beta*(E_after - self.E)),1):
             #if particle == 1:
             self.directions_dict[self.counter] = self.neighbours[direction_id] #at equilibrium so all particles count
+            self.all_directions_dict[particle][self.counter] = direction_id+1
+            self.all_directions_dict[other_particle][self.counter] = reverse_direction + 1
             #swap occurs
             self.E = E_after
             self.swaps[self.counter] = 1
@@ -801,7 +836,9 @@ class Kawasaki_Discrete:
         self.mode = mode
         self.pairs = self.get_pairs()
         
-        #print("HERE",self.pairs)
+        self.all_directions_dict = np.zeros((self.particles+1,iterations+1),dtype=int)
+        D_base = int(np.floor(self.D))
+        print("print",D_base,self.D)
         self.E = self.total_energy()
         self.pair_count[self.counter] = len(self.pairs)
         self.results[self.counter] = self.E
@@ -820,11 +857,20 @@ class Kawasaki_Discrete:
                 self.lattice_snaps[self.counter] = np.copy(self.lattice) 
                 self.energy_snaps[self.counter] = self.draw_energies()
                 self.frame_snaps[self.counter] = {k: np.array(v) for k, v in self.frame.items()}
-                
+                self.position_snaps[self.counter] = np.copy(self.position)
             self.swaps[self.counter] = 0
             self.Kawasaki()
-           
-            self.update_position()
+            #for i in range(0,50):
+            
+            
+            #decide whether to update position by d
+            for i in range(0,D_base):
+                self.update_position()
+                
+            r = np.random.rand()
+            
+            if r < (self.D - D_base):
+                self.update_position()
             
             #print("U",self.E,self.lattice)
             
