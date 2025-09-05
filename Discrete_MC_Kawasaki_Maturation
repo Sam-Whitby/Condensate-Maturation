@@ -8,6 +8,9 @@ def moving_average(x, w):
     return np.convolve(x, np.ones(w), 'valid') / w
 
 
+
+
+
 class Kawasaki_Discrete:
    
     
@@ -205,6 +208,7 @@ class Kawasaki_Discrete:
         
         self.lattice_snaps = dict()
         self.lattice_snaps[0] = self.lattice
+        self.energy_snaps[0] = self.draw_energies()
         self.E = self.total_energy()
         
         
@@ -445,8 +449,8 @@ class Kawasaki_Discrete:
     def Kawasaki(self):
         
         
-        #a big speed up perhaps? Not really
         
+        reverse_direction = 0  #just a placeholder, we don't care about this if doing non-local moves.
         
         self.swaps[self.counter] = 0
         
@@ -476,11 +480,12 @@ class Kawasaki_Discrete:
         
         if self.local:
             direction = self.neighbours[direction_id]
+            #print(self.counter,direction)
             adjacent_coordinate = site1 + direction
             PBC_adjacent_coordinate = adjacent_coordinate%self.L
             site2 = tuple(PBC_adjacent_coordinate)
             
-            reverse_direction = direction = (direction_id+2)%4
+            reverse_direction = (direction_id+2)%4
             
         else:
             #make sure big enough
@@ -633,8 +638,8 @@ class Kawasaki_Discrete:
             #lastly update the frame
             if self.local:
                 if not np.array_equal(adjacent_coordinate,PBC_adjacent_coordinate):
-
-
+                    #print(self.counter,direction)
+                    
                     self.frame[p1] += direction
                     #print("HERE",adjacent_coordinate,PBC_adjacent_coordinate,direction,self.frame)
                     if p2 != 0:
@@ -666,7 +671,8 @@ class Kawasaki_Discrete:
         
         #self.position = old_positions
         
-    def show(self,bleached=False,plot=True):
+    def show_FRAP(self,bleached=False,plot=True):
+        import matplotlib.pyplot as plt
         if not bleached:
             if plot:
                 plt.imshow(self.lattice != 0)
@@ -677,7 +683,7 @@ class Kawasaki_Discrete:
             
             bl = np.zeros_like(self.lattice)
             for c,v in np.ndenumerate(self.lattice):
-                if v not in self.bleached:
+                if v not in self.bleached[self.bleach_time]:
                     bl[c] = v
             if plot:
                 plt.imshow(bl != 0)
@@ -708,11 +714,14 @@ class Kawasaki_Discrete:
         #print("COM", self.COM)
             
         
-    def FRAP(self,radius):
+    def FRAP(self,radius,COM=True):
         
         if self.first_FRAP:
             self.first_FRAP = False
-            self.get_COM()
+            if COM == True:
+                self.get_COM()
+            else:
+                self.COM= np.array([0,0])
 
             #now roll the lattice and positions
 
@@ -725,6 +734,7 @@ class Kawasaki_Discrete:
             #also flip all previous things 
 
             for k,l in self.lattice_snaps.items():
+                #print(self.rolls,k,self.lattice_snaps.keys(),self.energy_snaps.keys())
 
                 self.lattice_snaps[k] = np.roll(np.roll(self.lattice_snaps[k],self.rolls[0],axis=0),self.rolls[1],axis=1)
                 self.energy_snaps[k] = np.roll(np.roll(self.energy_snaps[k],self.rolls[0],axis=0),self.rolls[1],axis=1)
@@ -751,6 +761,70 @@ class Kawasaki_Discrete:
                 self.bleached[bleach_time].add(site)
         self.lattice_snaps[self.counter] = self.lattice
         self.frame_snaps[self.counter] = {k: np.array(v) for k, v in self.frame.items()}
+        
+    def organise_J(self,equal=True,sets=2):
+        particles = self.particles
+        J = np.tril(self.J,-1)
+        descending_values = np.array(sorted(list(set(sorted(J.flatten()))-{0}))).flatten()
+        ordered_J = np.zeros_like(J)
+        if sets == 2:
+            set1_values = np.arange(1,int(particles/2)+1,1)
+            set2_values = np.arange(int(particles/2)+1,int(particles)+1,1)
+            set1_pairs = [(x, y) for i, x in enumerate(set1_values) for y in set1_values[i + 1:]]
+            set2_pairs = [(x, y) for i, x in enumerate(set2_values) for y in set2_values[i + 1:]]
+            
+            if equal:
+                all_pairs = set(set1_pairs+set2_pairs)
+            else:
+                all_pairs = set(set1_pairs)
+            
+            
+        elif sets == 3:
+            set1_values = np.arange(1,int(particles/3)+1,1)
+            set2_values = np.arange(int(particles/3)+1,2*int(particles/3)+1,1)
+            set3_values = np.arange(2*int(particles/3)+1,int(particles)+1,1)
+            set1_pairs = [(x, y) for i, x in enumerate(set1_values) for y in set1_values[i + 1:]]
+            set2_pairs = [(x, y) for i, x in enumerate(set2_values) for y in set2_values[i + 1:]]
+            set3_pairs = [(x, y) for i, x in enumerate(set3_values) for y in set3_values[i + 1:]]
+            
+            if equal:
+                all_pairs = set(set1_pairs+set2_pairs+set3_pairs)
+            else:
+                all_pairs = set(set1_pairs)
+                
+            
+
+        
+            
+
+
+        #first get a random arrangement of the pairs.
+        random_list = []
+        for coord,val in np.ndenumerate(ordered_J):
+            x = coord[0]
+            y = coord[1]
+            if x != y:
+                random_list.append((x,y))
+        np.random.shuffle(random_list)
+        top = 0
+        bottom = -1
+        for r in random_list:
+
+            x = r[0]
+            y = r[1]
+            if ordered_J[x,y] == 0.:
+                #then we have a pair that needs allocating.
+                if (x,y) in all_pairs or (y,x) in all_pairs:
+
+                    ordered_J[x,y] = descending_values[top]
+                    ordered_J[y,x] = descending_values[top]
+                    top += 1
+                else:
+                    ordered_J[x,y] = descending_values[bottom]
+                    ordered_J[y,x] = descending_values[bottom]
+                    bottom -= 1
+        self.J = ordered_J
+        #organise_J(a.J,particles=a.particles)
         
     def history(self,bleached=False):
         self.to_print = dict()
@@ -836,7 +910,7 @@ class Kawasaki_Discrete:
         self.mode = mode
         self.pairs = self.get_pairs()
         
-        self.all_directions_dict = np.zeros((self.particles+1,iterations+1),dtype=int)
+        self.all_directions_dict = np.zeros((self.particles+1,self.counter + iterations+1),dtype=int)
         D_base = int(np.floor(self.D))
         print("print",D_base,self.D)
         self.E = self.total_energy()
@@ -878,6 +952,7 @@ class Kawasaki_Discrete:
                 return()
             self.counter += 1
         #self.counter -= 1
+    
             
   
 
